@@ -3,7 +3,7 @@
 #SBATCH --job-name=generate_synthetic_data
 #SBATCH --output=logs/generate_synthetic_data_v1-%j.log
 #SBATCH --error=logs/generate_synthetic_data_v1-%j.err
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=1
 
 set -e  # Exit on any error
 
@@ -14,7 +14,7 @@ module load Python/3.13.1-GCCcore-14.2.0
 
 mkdir -p $SCRATCH
 
-RUN_NAME = "Generate Synthetic Data"
+RUN_NAME="Generate Synthetic Data"
 
 # Log system info
 echo "=== Job Information ==="
@@ -35,7 +35,7 @@ source $SCRATCH/.venv/bin/activate
 uv sync
 
 
-python3 prepare_data.py max_entries=10 dataset_path="arnastofnun/IGC-2024" text_column="document" data_directory="wiki"
+python3 prepare_data.py max_entries=0 dataset_path="arnastofnun/IGC-2024" text_column="document" data_directory="wiki" push_to_hub=True
 
 # Log completion
 echo "=== Job Completion ==="
