@@ -57,9 +57,9 @@ class DataConfig:
 
 def get_icelandic_compatible_fonts():
     """Get a curated list of fonts known to support Icelandic characters."""
-    # Curated list of macOS fonts that support Latin Extended-A (includes Icelandic)
+    # Curated list of fonts that support Latin Extended-A (includes Icelandic)
     font_names = [
-        # System fonts with Latin Extended support
+        # macOS system fonts
         "Arial.ttf",
         "Arial Bold.ttf",
         "Arial Italic.ttf",
@@ -91,12 +91,41 @@ def get_icelandic_compatible_fonts():
         "Didot.ttc",
         "Avenir.ttc",
         "Avenir Next.ttc",
+        # Ubuntu/Linux fonts
+        "DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf",
+        "DejaVuSerif.ttf",
+        "DejaVuSerif-Bold.ttf",
+        "LiberationSans-Regular.ttf",
+        "LiberationSans-Bold.ttf",
+        "LiberationSerif-Regular.ttf",
+        "LiberationSerif-Bold.ttf",
+        "FreeSans.ttf",
+        "FreeSansBold.ttf",
+        "FreeSerif.ttf",
+        "FreeSerifBold.ttf",
+        "NotoSans-Regular.ttf",
+        "NotoSans-Bold.ttf",
+        "NotoSerif-Regular.ttf",
+        "NotoSerif-Bold.ttf",
     ]
 
+    # Platform-specific font directories
     font_directories = [
+        # macOS paths
         "/System/Library/Fonts",
         "/System/Library/Fonts/Supplemental",
         "/Library/Fonts",
+        # Ubuntu/Linux paths
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts/truetype/liberation2",
+        "/usr/share/fonts/truetype/freefont",
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        # User fonts (both platforms)
+        str(Path.home() / ".fonts"),
+        str(Path.home() / ".local/share/fonts"),
     ]
 
     available_fonts = []
@@ -107,6 +136,13 @@ def get_icelandic_compatible_fonts():
             if font_path.exists():
                 available_fonts.append(str(font_path))
                 break  # Found the font, no need to check other directories
+
+    if not available_fonts:
+        logger.warning("No Icelandic-compatible fonts found in standard locations")
+        logger.info(f"Searched directories: {font_directories}")
+    else:
+        logger.info(f"Found {len(available_fonts)} Icelandic-compatible fonts")
+        logger.debug(f"Available fonts: {available_fonts[:5]}...")  # Log first 5
 
     return available_fonts
 
