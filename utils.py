@@ -360,7 +360,7 @@ def apply_random_transformation(
     paragraph_bboxes: list[dict] | None = None,
 ) -> tuple[Image.Image, dict, list[dict]]:
     transformation = random.choice(
-        ["blur", "rotate", "ink_splashes", "skew", "perspective"]
+        ["blur", "rotate", "ink_splashes", "skew", "perspective", "dusty-paper"]
     )
 
     paragraph_bboxes_copy = _copy_paragraph_bboxes(paragraph_bboxes)
@@ -428,6 +428,24 @@ def apply_random_transformation(
                 **perspective_meta,
             },
             transformed_bboxes,
+        )
+
+    if transformation == "dusty-paper":
+        # create grainy overlay to simulate dusty paper
+        # varies in grain size and intensity
+        grain_size = random.randint(1, 3)
+        intensity = random.uniform(0.05, 0.15)
+        noise = Image.effect_noise(image.size, grain_size * 10)
+        grainy_overlay = noise.convert("RGB")
+        dusty_image = Image.blend(image, grainy_overlay, intensity)
+        return (
+            dusty_image,
+            {
+                "transformation": "dusty-paper",
+                "grain_size": grain_size,
+                "intensity": round(intensity, 3),
+            },
+            paragraph_bboxes_copy,
         )
 
     dx = random.uniform(-0.2, 0.2)
