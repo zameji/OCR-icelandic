@@ -4,6 +4,7 @@ temp
 logs
 models
 isl_synthetic_ocr_output
+fonts
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

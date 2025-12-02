@@ -19,6 +19,7 @@ dependencies = [
     "ipywidgets>=8.1.7",
     "bitsandbytes>=0.48.1",
     "python-levenshtein>=0.27.3",
+    "pyfonts>=1.1.1",
 ]
 
 [dependency-groups]
