@@ -16,6 +16,9 @@ dependencies = [
     "wandb>=0.22.0",
     "gradio>=5.47.0",
     "dataclasses>=0.8",
+    "ipywidgets>=8.1.7",
+    "bitsandbytes>=0.48.1",
+    "python-levenshtein>=0.27.3",
 ]
 
 [dependency-groups]

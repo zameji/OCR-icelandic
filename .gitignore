@@ -1,12 +1,9 @@
 wandb
 temp
-full_idefics3_lora_merged
-isl_synthetic_ocr_output
-merged_model
-results
-lora_results
 .gradio
 logs
+models
+isl_synthetic_ocr_output
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
