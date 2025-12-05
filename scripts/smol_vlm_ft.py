@@ -1,9 +1,11 @@
 import logging
+import sys
 from typing import Optional
 
 import numpy as np
+import peft
 import torch
-import wandb
+import transformers
 from datasets import load_dataset
 from helpers import TrainConfig
 from Levenshtein import distance as lev_distance
@@ -17,143 +19,14 @@ from transformers import (
     TrainingArguments,
 )
 
+import wandb
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(message)s",
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
-
-def collate_fn(examples):
-    texts = []
-    images = []
-    for example in examples:
-        image = example["image"]
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        task_desc = "Extract the text from the image."
-        answer = example["text"]
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": task_desc},
-                ],
-            },
-            {"role": "assistant", "content": [{"type": "text", "text": answer}]},
-        ]
-        text = processor.apply_chat_template(messages, add_generation_prompt=False)
-        texts.append(text.strip())
-        images.append([image])
-
-    batch = processor(text=texts, images=images, return_tensors="pt", padding=True)
-    labels = batch["input_ids"].clone()
-    labels[labels == processor.tokenizer.pad_token_id] = -100
-    labels[labels == image_token_id] = -100
-    batch["labels"] = labels
-
-    return batch
-
-
-def compute_text_metrics(predictions, labels):
-    """Compute OCR metrics using Levenshtein distance library."""
-    # Convert to numpy if needed
-    if isinstance(predictions, torch.Tensor):
-        predictions = predictions.detach().cpu().numpy()
-    if isinstance(labels, torch.Tensor):
-        labels = labels.detach().cpu().numpy()
-
-    # Handle logits
-    if predictions.ndim > 2:
-        predictions = np.argmax(predictions, axis=-1)
-
-    # Decode predictions and labels
-    label_ids = np.where(labels != -100, labels, processor.tokenizer.pad_token_id)
-    decoded_preds = processor.batch_decode(predictions, skip_special_tokens=True)
-    decoded_labels = processor.batch_decode(label_ids, skip_special_tokens=True)
-
-    # Special Icelandic characters
-    special_chars = set("þðáéíóúýæö")
-
-    # Initialize metrics
-    metrics = {
-        "total_words": 0,
-        "word_errors": 0,
-        "total_chars": 0,
-        "char_errors": 0,
-        "exact_matches": 0,
-        "special_correct": 0,
-        "special_total": 0,
-        "seq_acc_5": 0,
-        "seq_acc_10": 0,
-    }
-
-    for pred, label in zip(decoded_preds, decoded_labels):
-        # Exact match
-        if pred == label:
-            metrics["exact_matches"] += 1
-
-        # Word-level metrics (using Levenshtein)
-        pred_words = pred.split()
-        label_words = label.split()
-        metrics["word_errors"] += lev_distance(pred_words, label_words)
-        metrics["total_words"] += len(label_words)
-
-        # Character-level metrics
-        char_dist = lev_distance(pred, label)
-        metrics["char_errors"] += char_dist
-        metrics["total_chars"] += len(label)
-
-        # Sequence accuracy thresholds
-        if len(label) > 0:
-            cer = char_dist / len(label)
-            if cer < 0.05:
-                metrics["seq_acc_5"] += 1
-            if cer < 0.10:
-                metrics["seq_acc_10"] += 1
-
-        # Special character accuracy (position-based): Old method, but its too strict
-        # for i, char in enumerate(label.lower()):
-        #     if char in special_chars:
-        #         metrics["special_total"] += 1
-        #         if i < len(pred) and pred.lower()[i] == char:
-        #             metrics["special_correct"] += 1
-
-        # Special character accuracy (count-based)
-        # Since we also report CER, this is acceptable
-        for char in special_chars:
-            label_count = label.lower().count(char)
-            pred_count = pred.lower().count(char)
-            metrics["special_total"] += label_count
-            metrics["special_correct"] += min(label_count, pred_count)
-
-    n = len(decoded_labels)
-
-    return {
-        "wer": metrics["word_errors"] / max(metrics["total_words"], 1),
-        "cer": metrics["char_errors"] / max(metrics["total_chars"], 1),
-        "exact_match": metrics["exact_matches"] / n,
-        "special_char_acc": metrics["special_correct"]
-        / max(metrics["special_total"], 1),
-        "seq_acc_5": metrics["seq_acc_5"] / n,
-        "seq_acc_10": metrics["seq_acc_10"] / n,
-    }
-
-
-def compute_metrics(eval_preds):
-    """Compute metrics function for Trainer."""
-
-    # eval_preds is an EvalPrediction object with predictions and label_ids attributes
-    predictions = eval_preds.predictions
-    labels = eval_preds.label_ids
-
-    # Handle tuple predictions (e.g., when model returns logits and hidden states)
-    if isinstance(predictions, tuple):
-        predictions = predictions[0]
-
-    return compute_text_metrics(predictions, labels)
 
 
 def fintune_smolvlm_ocr(cfg: TrainConfig) -> None:
@@ -173,6 +46,7 @@ def fintune_smolvlm_ocr(cfg: TrainConfig) -> None:
 
     # our custom model, with pre-trained LLM backbone on Icelandic text
     model_id = cfg.model_id  # ./full_idefics3_lora_merged
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     if USE_QLORA or USE_LORA:
         lora_config = LoraConfig(
@@ -223,7 +97,7 @@ def fintune_smolvlm_ocr(cfg: TrainConfig) -> None:
         for param in model.model.vision_model.parameters():
             param.requires_grad = False
 
-    ds = load_dataset(cfg.hf_dataset_id trust_remote_code=True)
+    ds = load_dataset(cfg.hf_dataset_id, trust_remote_code=True)
 
     train_ds = ds["train"]
     # validation_ds = ds["validation"]
@@ -232,6 +106,134 @@ def fintune_smolvlm_ocr(cfg: TrainConfig) -> None:
     image_token_id = processor.tokenizer.additional_special_tokens_ids[
         processor.tokenizer.additional_special_tokens.index("<image>")
     ]
+
+    def collate_fn(examples):
+        texts = []
+        images = []
+        for example in examples:
+            image = example["image"]
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            task_desc = "Extract the text from the image."
+            answer = example["text"]
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": task_desc},
+                    ],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": answer}]},
+            ]
+            text = processor.apply_chat_template(messages, add_generation_prompt=False)
+            texts.append(text.strip())
+            images.append([image])
+
+        batch = processor(text=texts, images=images, return_tensors="pt", padding=True)
+        labels = batch["input_ids"].clone()
+        labels[labels == processor.tokenizer.pad_token_id] = -100
+        labels[labels == image_token_id] = -100
+        batch["labels"] = labels
+
+        return batch
+
+    def compute_text_metrics(predictions, labels):
+        """Compute OCR metrics using Levenshtein distance library."""
+        # Convert to numpy if needed
+        if isinstance(predictions, torch.Tensor):
+            predictions = predictions.detach().cpu().numpy()
+        if isinstance(labels, torch.Tensor):
+            labels = labels.detach().cpu().numpy()
+
+        # Handle logits
+        if predictions.ndim > 2:
+            predictions = np.argmax(predictions, axis=-1)
+
+        # Decode predictions and labels
+        label_ids = np.where(labels != -100, labels, processor.tokenizer.pad_token_id)
+        decoded_preds = processor.batch_decode(predictions, skip_special_tokens=True)
+        decoded_labels = processor.batch_decode(label_ids, skip_special_tokens=True)
+
+        # Special Icelandic characters
+        special_chars = set("þðáéíóúýæö")
+
+        # Initialize metrics
+        metrics = {
+            "total_words": 0,
+            "word_errors": 0,
+            "total_chars": 0,
+            "char_errors": 0,
+            "exact_matches": 0,
+            "special_correct": 0,
+            "special_total": 0,
+            "seq_acc_5": 0,
+            "seq_acc_10": 0,
+        }
+
+        for pred, label in zip(decoded_preds, decoded_labels):
+            # Exact match
+            if pred == label:
+                metrics["exact_matches"] += 1
+
+            # Word-level metrics (using Levenshtein)
+            pred_words = pred.split()
+            label_words = label.split()
+            metrics["word_errors"] += lev_distance(pred_words, label_words)
+            metrics["total_words"] += len(label_words)
+
+            # Character-level metrics
+            char_dist = lev_distance(pred, label)
+            metrics["char_errors"] += char_dist
+            metrics["total_chars"] += len(label)
+
+            # Sequence accuracy thresholds
+            if len(label) > 0:
+                cer = char_dist / len(label)
+                if cer < 0.05:
+                    metrics["seq_acc_5"] += 1
+                if cer < 0.10:
+                    metrics["seq_acc_10"] += 1
+
+            # Special character accuracy (position-based): Old method, but its too strict
+            # for i, char in enumerate(label.lower()):
+            #     if char in special_chars:
+            #         metrics["special_total"] += 1
+            #         if i < len(pred) and pred.lower()[i] == char:
+            #             metrics["special_correct"] += 1
+
+            # Special character accuracy (count-based)
+            # Since we also report CER, this is acceptable
+            for char in special_chars:
+                label_count = label.lower().count(char)
+                pred_count = pred.lower().count(char)
+                metrics["special_total"] += label_count
+                metrics["special_correct"] += min(label_count, pred_count)
+
+        n = len(decoded_labels)
+
+        return {
+            "wer": metrics["word_errors"] / max(metrics["total_words"], 1),
+            "cer": metrics["char_errors"] / max(metrics["total_chars"], 1),
+            "exact_match": metrics["exact_matches"] / n,
+            "special_char_acc": metrics["special_correct"]
+            / max(metrics["special_total"], 1),
+            "seq_acc_5": metrics["seq_acc_5"] / n,
+            "seq_acc_10": metrics["seq_acc_10"] / n,
+        }
+
+    def compute_metrics(eval_preds):
+        """Compute metrics function for Trainer."""
+
+        # eval_preds is an EvalPrediction object with predictions and label_ids attributes
+        predictions = eval_preds.predictions
+        labels = eval_preds.label_ids
+
+        # Handle tuple predictions (e.g., when model returns logits and hidden states)
+        if isinstance(predictions, tuple):
+            predictions = predictions[0]
+
+        return compute_text_metrics(predictions, labels)
 
     # Initialize wandb
     run = wandb.init(
@@ -269,17 +271,17 @@ def fintune_smolvlm_ocr(cfg: TrainConfig) -> None:
             if torch.cuda.is_available()
             else "CPU",
             # Dataset info
-            "total_train_dataset_size": len(train_dataset),
-            "total_eval_dataset_size": len(eval_dataset),
+            "total_train_dataset_size": len(train_ds),
+            "total_eval_dataset_size": len(validation_ds),
             "effective_batch_size": cfg.per_device_train_batch_size
             * cfg.gradient_accumulation_steps,
-            "total_training_steps": len(train_dataset)
+            "total_training_steps": len(train_ds)
             // (cfg.per_device_train_batch_size * cfg.gradient_accumulation_steps)
             * cfg.num_train_epochs,
             # Model architecture
-            "model_size": sum(p.numel() for p in text_model.parameters()),
+            "model_size": sum(p.numel() for p in model.parameters()),
             "trainable_params": sum(
-                p.numel() for p in text_model.parameters() if p.requires_grad
+                p.numel() for p in model.parameters() if p.requires_grad
             ),
             "lora_target_modules": lora_config.target_modules,
             # Environment
