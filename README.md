@@ -255,15 +255,15 @@ If you use this project in your research, please cite:
 ```bibtex
 @software{ocr_icelandic_2024,
   title={OCR-icelandic: Language-Agnostic OCR Model Training Pipeline},
-  author={Sigurdur Haukur},
-  year={2024},
+  author={Sigurdur Haukur Birgisson},
+  year={2025},
   url={https://github.com/sigurdurhaukur/OCR-icelandic}
 }
 ```
 
 ## License
 
-Apache 2.0
+[Apache 2.0](./LICENSE)
 
 ## Contributing
 
