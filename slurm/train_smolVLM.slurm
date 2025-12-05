@@ -49,7 +49,19 @@ cd $SCRATCH
 source $SCRATCH/.venv/bin/activate
 uv sync
 
-python3 scripts/smol_vlm_ft.py
+python3 scripts/smol_vlm_ft.py \
+    push_to_hub=True \
+    per_device_train_batch_size=4 \
+    per_device_eval_batch_size=4 \
+    logging_steps=100 \
+    save_steps=500 \
+    warmup_steps=500 \
+    output_dir="smolVLM_lora_icelandic_v4" \
+    model_id="HuggingFaceTB/SmolVLM-Base" \
+    eval_steps=125 \
+    run_name="smolVLM_icelandic_synthetic_ocr_v4" \
+    learning_rate=3e-4 \
+    hf_dataset_id="Sigurdur/isl_synthetic_ocr" \
 
 
 # Log completion

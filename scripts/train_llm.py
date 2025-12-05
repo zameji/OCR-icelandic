@@ -18,28 +18,27 @@ usage: python train_llm.py push_to_hub=True
 """
 
 import logging
-import os
 import sys
-from dataclasses import dataclass
-import transformers
-import peft
 import time
 
+import peft
 import torch
-from datasets import load_dataset, Dataset
+import transformers
+import wandb
+from datasets import Dataset, load_dataset
+from helpers import TrainConfig
 from omegaconf import OmegaConf
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
+    AutoProcessor,
     AutoTokenizer,
     DataCollatorForLanguageModeling,
     Idefics3ForConditionalGeneration,
-    AutoProcessor,
     Trainer,
-    TrainingArguments,
     TrainerCallback,
+    TrainingArguments,
 )
-import wandb
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,73 +49,6 @@ logger = logging.getLogger(__name__)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-
-@dataclass
-class TrainConfig:
-    # Dataset configuration
-    hf_dataset_id: str = "arnastofnun/IGC-2024"  # Hugging Face dataset ID
-    hf_data_directory: str = "wiki"  # Subdirectory within the dataset
-    # dataset_split: str = "train[:95%]"  # Dataset split to use for training
-    # eval_dataset_split: str = "train[95%:100%]"  # Dataset split to use for evaluation
-    max_length: int = 512  # Max token length for text sequences
-    max_entries: int = 0  # Max entries to process from dataset (for quick testing, 0 = all)
-    max_eval_entries: int = 10  # Max entries to process from eval dataset (for quick testing, 0 = all)
-    text_key: str = "document"  # Key in dataset containing text data
-
-    # Model configuration
-    model_id: str = "HuggingFaceTB/SmolVLM-Base"  # Base model ID
-    push_to_hub: bool = False  # Whether to push trained model to Hugging Face Hub
-    hub_repo_id: str = (
-        "Sigurdur/SmolVLM-Base-ICELANDIC"  # Hugging Face repo ID to push model
-    )
-
-    # LoRA configuration
-    lora_r: int = 32  # Rank of adaptation - higher values = more parameters but potentially better performance
-    lora_alpha: int = 64  # LoRA scaling parameter - typically 2x the rank
-    lora_dropout: float = 0.1  # Dropout for LoRA layers
-
-    # Training arguments
-    output_dir: str = (
-        "./lora_results"  # Directory to save LoRA adapters and checkpoints
-    )
-    per_device_train_batch_size: int = 8  # Batch size per device during training
-    per_device_eval_batch_size: int = 8  # Batch size per device during evaluation
-    gradient_accumulation_steps: int = 4  # Number of steps to accumulate gradients
-    num_train_epochs: int = 1  # Total number of training epochs
-    learning_rate: float = 1e-4  # Learning rate for optimizer
-    warmup_steps: int = 100  # Number of warmup steps for learning rate scheduler
-    logging_steps: int = 50  # Log every X updates steps
-    eval_steps: int = 200  # Evaluate every X steps
-    save_strategy: str = "steps"  # Save checkpoint every X steps
-    save_steps: int = 200  # Save checkpoint every X steps
-    save_total_limit: int = 3  # Limit the total amount of checkpoints. Deletes the older checkpoints.
-    load_best_model_at_end: bool = True  # Load best model at end of training
-    eval_strategy: str = "steps"  # Evaluation strategy during training
-    fp16: bool = True  # Use mixed precision training if True
-    dataloader_drop_last: bool = True  # Drop last incomplete batch if True
-    remove_unused_columns: bool = False  # Whether to remove unused columns in dataset
-    load_best_model_at_end: bool = True  # Load best model at end of training
-    metric_for_best_model: str = "eval_loss"  # Metric to use for best model selection
-    greater_is_better: bool = False  # Whether greater metric is better (False for loss)
-
-    # logging configuration
-    report_to: str = "wandb"  # Report to wandb
-    entity: str = "sigurdurhaukur-team"  # wandb entity
-    project: str = "smolVLM"  # wandb project name
-    run_name: str = "lora-finetune-icelandic"  # wandb run name
-    run_description: str = "LoRA fine-tuning of SmolVLM text model on Icelandic text data"  # wandb run description
-    tags: list = (
-        "LoRA",
-        "Idefics3",
-        "SmolVLM",
-        "Icelandic",
-        "Fine-tuning",
-        "NLP",
-        "Vision-Language Model",
-    )  # wandb tags
-
-
-import time
 
 class TokenCountCallback(TrainerCallback):
     def __init__(self, max_length, tokenizer=None):
@@ -134,7 +66,11 @@ class TokenCountCallback(TrainerCallback):
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
         # Calculate tokens per step
-        tokens_per_step = args.per_device_train_batch_size * args.gradient_accumulation_steps * self.max_length
+        tokens_per_step = (
+            args.per_device_train_batch_size
+            * args.gradient_accumulation_steps
+            * self.max_length
+        )
         self.total_tokens += tokens_per_step
 
         # Calculate timing
@@ -155,17 +91,23 @@ class TokenCountCallback(TrainerCallback):
             # Add GPU memory if available
             if torch.cuda.is_available():
                 log_data["gpu_memory_used_gb"] = torch.cuda.memory_allocated() / 1024**3
-                log_data["gpu_memory_cached_gb"] = torch.cuda.memory_reserved() / 1024**3
+                log_data["gpu_memory_cached_gb"] = (
+                    torch.cuda.memory_reserved() / 1024**3
+                )
 
             wandb.log(log_data, step=state.global_step)
 
     def on_train_end(self, args, state, control, **kwargs):
         total_time = time.time() - self.start_time if self.start_time else 0
-        wandb.log({
-            "final_total_tokens": self.total_tokens,
-            "total_training_time_minutes": total_time / 60,
-            "average_tokens_per_second": self.total_tokens / total_time if total_time > 0 else 0,
-        })
+        wandb.log(
+            {
+                "final_total_tokens": self.total_tokens,
+                "total_training_time_minutes": total_time / 60,
+                "average_tokens_per_second": self.total_tokens / total_time
+                if total_time > 0
+                else 0,
+            }
+        )
 
 
 class EvaluationCallback(TrainerCallback):
@@ -179,7 +121,9 @@ class EvaluationCallback(TrainerCallback):
             "Reykjavík er höfuðborg",
         ]
 
-    def on_evaluate(self, args, state, control, model=None, eval_dataloader=None, **kwargs):
+    def on_evaluate(
+        self, args, state, control, model=None, eval_dataloader=None, **kwargs
+    ):
         """Generate sample text during evaluation to monitor quality"""
         if model is None:
             return
@@ -199,7 +143,9 @@ class EvaluationCallback(TrainerCallback):
                         temperature=0.7,
                         pad_token_id=self.tokenizer.eos_token_id,
                     )
-                generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                generated_text = self.tokenizer.decode(
+                    outputs[0], skip_special_tokens=True
+                )
                 generated_samples[f"eval_sample_{i}"] = generated_text
             except Exception as e:
                 logger.warning(f"Failed to generate sample {i}: {e}")
@@ -263,15 +209,10 @@ def prepare_datasets(
 
     logger.info(f"Dataset loaded: {ds}")
 
-
     # split and shuffle the dataset
-    train_ds, eval_ds = ds["train"].train_test_split(
-        test_size=0.2, seed=42
-    ).values()
+    train_ds, eval_ds = ds["train"].train_test_split(test_size=0.2, seed=42).values()
 
-    eval_ds, test_ds = eval_ds.train_test_split(
-        test_size=0.5, seed=42
-    ).values()
+    eval_ds, test_ds = eval_ds.train_test_split(test_size=0.5, seed=42).values()
 
     # aim for 80% train, 10% eval, 10% test split (and at least 2k samples in each)
     logger.info(f"Training dataset size: {len(train_ds)}")
@@ -305,7 +246,9 @@ def prepare_datasets(
         all_input_ids = []
         for example in dataset:
             all_input_ids.extend(example["input_ids"])
-            all_input_ids.append(tokenizer.eos_token_id)  # Add EOS token between examples
+            all_input_ids.append(
+                tokenizer.eos_token_id
+            )  # Add EOS token between examples
 
         # Split into chunks of max_length
         packed_input_ids = []
@@ -326,10 +269,14 @@ def prepare_datasets(
 
     # Limit dataset sizes if specified
     if cfg.max_entries > 0:
-        train_dataset = train_dataset.select(range(min(cfg.max_entries, len(train_dataset))))
+        train_dataset = train_dataset.select(
+            range(min(cfg.max_entries, len(train_dataset)))
+        )
 
     if cfg.max_eval_entries > 0:
-        eval_dataset = eval_dataset.select(range(min(cfg.max_eval_entries, len(eval_dataset))))
+        eval_dataset = eval_dataset.select(
+            range(min(cfg.max_eval_entries, len(eval_dataset)))
+        )
 
     logger.info(f"Training dataset size: {len(train_dataset)}")
     logger.info(f"Evaluation dataset size: {len(eval_dataset)}")
@@ -380,12 +327,15 @@ def get_text_model_from_idefics3(
 
     return text_model
 
+
 def lora_merge_and_save_full_model(model, text_model, tokenizer, cfg):
-   # test lora merging and saving full model
+    # test lora merging and saving full model
     lora_merged = text_model.merge_and_unload()
 
     # Test the LoRA model BEFORE merging
-    test_input = tokenizer("Einu sinni var karl og kerling sem bjuggu í", return_tensors="pt").input_ids.to(DEVICE)
+    test_input = tokenizer(
+        "Einu sinni var karl og kerling sem bjuggu í", return_tensors="pt"
+    ).input_ids.to(DEVICE)
     lora_output = text_model.generate(test_input, max_new_tokens=10, do_sample=False)
     lora_decoded = tokenizer.decode(lora_output[0], skip_special_tokens=True)
     print(f"LoRA text model: {lora_decoded}")
@@ -396,9 +346,9 @@ def lora_merge_and_save_full_model(model, text_model, tokenizer, cfg):
     text_model_state_dict = {}
     lm_head_weight = None
     for key, value in merged_state_dict.items():
-        if key == 'lm_head.weight':
+        if key == "lm_head.weight":
             lm_head_weight = value  # Store for later use
-        elif key.startswith('model.'):
+        elif key.startswith("model."):
             new_key = key[6:]  # Remove 'model.' prefix
             text_model_state_dict[new_key] = value
         else:
@@ -409,7 +359,6 @@ def lora_merge_and_save_full_model(model, text_model, tokenizer, cfg):
 
     if lm_head_weight is not None:
         model.lm_head.weight.data = lm_head_weight.data
-
 
     # save the full model with LoRA merged
     model.save_pretrained("full_idefics3_lora_merged")
@@ -422,11 +371,13 @@ def lora_merge_and_save_full_model(model, text_model, tokenizer, cfg):
     ).to(DEVICE)
 
     # After loading the saved model, test it
-    loaded_output = loaded_model.generate(test_input, max_new_tokens=10, do_sample=False)
+    loaded_output = loaded_model.generate(
+        test_input, max_new_tokens=10, do_sample=False
+    )
     loaded_decoded = tokenizer.decode(loaded_output[0], skip_special_tokens=True)
     print(f"Loaded model: {loaded_decoded}")
 
-        # Optionally push to Hugging Face Hub
+    # Optionally push to Hugging Face Hub
     if cfg.push_to_hub and cfg.hub_repo_id:
         logger.info(f"Pushing model to the hub at {cfg.hub_repo_id}...")
         model.push_to_hub(cfg.hub_repo_id)
@@ -458,9 +409,7 @@ def fine_tune_text_model(cfg: TrainConfig) -> None:
     text_model = get_text_model_from_idefics3(model)
 
     # Load processor and tokenizer
-    processor = AutoProcessor.from_pretrained(
-        cfg.model_id
-    )
+    processor = AutoProcessor.from_pretrained(cfg.model_id)
     tokenizer = processor.tokenizer
 
     # Configure LoRA
@@ -487,7 +436,7 @@ def fine_tune_text_model(cfg: TrainConfig) -> None:
     text_model = get_peft_model(text_model, lora_config)
 
     # the base_model_name_or_path key in the config causes issues when loading later, so we need to update it
-    text_model.peft_config['default'].base_model_name_or_path = cfg.model_id
+    text_model.peft_config["default"].base_model_name_or_path = cfg.model_id
 
     # Move to device
     text_model.to(DEVICE)
@@ -538,19 +487,23 @@ def fine_tune_text_model(cfg: TrainConfig) -> None:
             # Hardware info
             "device": DEVICE,
             "gpu_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
-            "gpu_name": torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU",
-
+            "gpu_name": torch.cuda.get_device_name()
+            if torch.cuda.is_available()
+            else "CPU",
             # Dataset info
             "total_train_dataset_size": len(train_dataset),
             "total_eval_dataset_size": len(eval_dataset),
-            "effective_batch_size": cfg.per_device_train_batch_size * cfg.gradient_accumulation_steps,
-            "total_training_steps": len(train_dataset) // (cfg.per_device_train_batch_size * cfg.gradient_accumulation_steps) * cfg.num_train_epochs,
-
+            "effective_batch_size": cfg.per_device_train_batch_size
+            * cfg.gradient_accumulation_steps,
+            "total_training_steps": len(train_dataset)
+            // (cfg.per_device_train_batch_size * cfg.gradient_accumulation_steps)
+            * cfg.num_train_epochs,
             # Model architecture
             "model_size": sum(p.numel() for p in text_model.parameters()),
-            "trainable_params": sum(p.numel() for p in text_model.parameters() if p.requires_grad),
+            "trainable_params": sum(
+                p.numel() for p in text_model.parameters() if p.requires_grad
+            ),
             "lora_target_modules": lora_config.target_modules,
-
             # Environment
             "python_version": sys.version,
             "torch_version": torch.__version__,
