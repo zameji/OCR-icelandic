@@ -4,23 +4,29 @@ Handles text overflow by creating multiple images if necessary.
 Saves the new dataset to disk and optionally pushes it to the Hugging Face Hub.
 """
 
+from collections import defaultdict
 import logging
 import random
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
 
 from datasets import Dataset, DatasetDict, Image, load_dataset
 from fontTools.ttLib import TTFont
-from ocr_iceladic.utils import apply_random_transformation, create_image_with_text
+import psutil
+from ocr_icelandic.utils import apply_random_transformation, create_image_with_text
 from omegaconf import OmegaConf
 from tqdm import tqdm
+from rich.logging import RichHandler
+from PIL import Image as PILImage
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[RichHandler(markup=True, rich_tracebacks=True)],
 )
 logger = logging.getLogger(__name__)
 
@@ -40,7 +46,7 @@ class DataConfig:
     image_height: int = 512
     image_dpi: int = 72
     img_background_color: str = "white"
-    font_path: str = "/System/Library/Fonts/Supplemental/Arial.ttf"
+    font_path: str = "/usr/share/fonts"
     font_size: int = 12
     font_color: str = "black"
     use_random_font_colors: bool = True  # Whether to use random font colors
@@ -64,6 +70,34 @@ class DataConfig:
     column_width: int | None = None  # Fixed column width in pixels (None => random)
     min_column_width: int = 100  # Minimum column width when randomizing
     max_column_width: int = 512  # Maximum column width when randomizing
+
+
+@dataclass
+class GenerationConfig(DataConfig):
+    """Configuration for image generation only"""
+
+    column_range: tuple[int, int] = (1, 1)
+    column_width_range: tuple[int, int] = (100, 512)
+    available_fonts: list[str] | None = None
+
+
+@dataclass
+class SingleImageData:
+    """Data for a single generated image"""
+
+    text: str
+    image: PILImage.Image
+    font_path: str
+    bg_color: tuple[int, int, int] | str
+    font_color: tuple[int, int, int] | str
+    font_size: int
+    image_width: int
+    image_height: int
+    image_dpi: int
+    text_vertical_alignment: str
+    text_horizontal_alignment: str
+    paragraph_bboxes: list[dict]
+    transformation: dict
 
 
 def get_random_background_color():
@@ -197,7 +231,7 @@ def get_icelandic_compatible_fonts():
 
     logger.info(f"Searching for fonts in directories: {font_dirs}")
 
-    available_fonts = []
+    available_fonts: list[str] = []
     characters_to_check = "ÁáÐðÉéÍíÓóÚúÝýÞþÆæÖö"
     for font_dir in tqdm(font_dirs, desc="Scanning font directories"):
         font_path = Path(font_dir)
@@ -223,31 +257,11 @@ def _normalize_range(
     return min_value, max_value
 
 
-def generate_image_dataset(texts: list[str], cfg: DataConfig) -> Dataset:
-    """
-    Generates a new dataset with images and corresponding text,
-    handling text overflow by creating multiple images.
-    Args:
-        texts (list of str): List of text entries to convert to images
-        cfg (DataConfig): Configuration for image generation
-    Returns:
-        Dataset: A Hugging Face Dataset with 'text' and 'image' columns
-    """
-    new_data: dict[str, list] = {
-        "text": [],
-        "image": [],
-        "font_path": [],
-        "bg_color": [],
-        "font_color": [],
-        "font_size": [],
-        "image_width": [],
-        "image_height": [],
-        "image_dpi": [],
-        "text_vertical_alignment": [],
-        "text_horizontal_alignment": [],
-        "paragraph_bboxes": [],
-        "transformation": [],
-    }
+def generate_single_text(
+    text: str, cfg: GenerationConfig
+) -> tuple[list[SingleImageData], int]:
+    # Split long texts first
+    text_chunks = split_long_text(text.strip(), cfg.max_text_length)
 
     # Get settings from config
     width = cfg.image_width
@@ -260,6 +274,107 @@ def generate_image_dataset(texts: list[str], cfg: DataConfig) -> Dataset:
     font_color = cfg.font_color
     vertical_alignment = cfg.text_vertical_alignment
 
+    available_fonts = cfg.available_fonts
+    column_range = cfg.column_range
+    column_width_range = cfg.column_width_range
+
+    images: list[SingleImageData] = []
+    for chunk in text_chunks:
+        remaining_text = chunk
+        while remaining_text:
+            # Select random font if enabled
+            current_font_path = font_path
+            if cfg.use_random_fonts and available_fonts:
+                current_font_path = random.choice(available_fonts)
+
+            # Select random background color if enabled
+            current_bg_color = bg_color
+            if cfg.use_random_backgrounds:
+                current_bg_color = get_random_background_color()
+
+            # Select random font color if enabled
+            if cfg.use_random_font_colors:
+                font_color = get_random_font_color(current_bg_color)
+
+            if cfg.num_columns is not None and cfg.num_columns > 0:
+                num_columns = cfg.num_columns
+            else:
+                num_columns = random.randint(*column_range)
+
+            if cfg.column_width is not None and cfg.column_width > 0:
+                column_width = cfg.column_width
+            else:
+                column_width = random.randint(*column_width_range)
+
+            image, fitted_text, paragraph_bboxes = create_image_with_text(
+                remaining_text,
+                image_size=(width, height),
+                alignment=alignment,
+                font_size=font_size,
+                font_path=current_font_path,
+                bg_color=current_bg_color,
+                font_color=font_color,
+                vertical_alignment=vertical_alignment,
+                dpi=dpi,
+                num_columns=num_columns,
+                column_gap=cfg.column_gap,
+                column_width=column_width,
+            )
+
+            transformed_image, transformation_meta, transformed_paragraph_bboxes = (
+                apply_random_transformation(
+                    image,
+                    current_bg_color,
+                    paragraph_bboxes=paragraph_bboxes,
+                )
+            )
+
+            if not fitted_text:
+                # No text could be fitted, break to avoid infinite loop
+                break
+
+            images.append(
+                SingleImageData(
+                    text=fitted_text,
+                    image=transformed_image,
+                    font_path=current_font_path,
+                    bg_color=current_bg_color,
+                    font_color=font_color,
+                    font_size=font_size,
+                    image_width=width,
+                    image_height=height,
+                    image_dpi=dpi,
+                    text_vertical_alignment=vertical_alignment,
+                    text_horizontal_alignment=alignment,
+                    paragraph_bboxes=transformed_paragraph_bboxes,
+                    transformation=transformation_meta,
+                )
+            )
+
+            # Update remaining text
+            # This assumes create_image_with_text preserves original whitespace
+            # and returns a prefix of the input text.
+            remaining_text = remaining_text[len(fitted_text) :].lstrip()
+
+    return images, len(text_chunks)
+
+
+def generate_image_dataset(texts: list[str], cfg: DataConfig) -> Dataset:
+    """
+    Generates a new dataset with images and corresponding text,
+    handling text overflow by creating multiple images.
+    Args:
+        texts (list of str): List of text entries to convert to images
+        cfg (DataConfig): Configuration for image generation
+    Returns:
+        Dataset: A Hugging Face Dataset with 'text' and 'image' columns
+    """
+
+    logger.info("Generating images from text...")
+
+    # fix number of examples to generate if specified
+    num_examples = cfg.num_examples if cfg.num_examples > 0 else len(texts)
+
     available_fonts = None
     if cfg.use_random_fonts:
         available_fonts = get_icelandic_compatible_fonts()
@@ -269,92 +384,68 @@ def generate_image_dataset(texts: list[str], cfg: DataConfig) -> Dataset:
         cfg.min_column_width, cfg.max_column_width, minimum=1
     )
 
-    # fix number of examples to generate if specified
-    if cfg.num_examples > 0:
-        texts = texts[: cfg.num_examples]
+    generation_cfg = GenerationConfig(
+        **asdict(cfg),
+        available_fonts=available_fonts,
+        column_range=column_range,
+        column_width_range=column_width_range,
+    )
 
-    logger.info("Generating images from text...")
+    new_data: defaultdict[str, list] = defaultdict(list)
     total_splits = 0
-    for text in tqdm(texts, desc="Processing text", unit="text"):
-        # Split long texts first
-        text_chunks = split_long_text(text.strip(), cfg.max_text_length)
-        if len(text_chunks) > 1:
-            total_splits += len(text_chunks) - 1
+    split_texts = 0
 
-        for chunk in tqdm(text_chunks, desc="Processing chunk", leave=False):
-            remaining_text = chunk
-            while remaining_text:
-                # Select random font if enabled
-                current_font_path = font_path
-                if cfg.use_random_fonts and available_fonts:
-                    current_font_path = random.choice(available_fonts)
+    # Use ProcessPoolExecutor for true parallel processing (bypass GIL)
+    # Use physical cores for CPU-bound tasks
+    max_workers = min(psutil.cpu_count(logical=False) or 4, len(texts[:num_examples]))
+    logger.info(
+        f"Using {max_workers} parallel workers (physical cores) for image generation."
+    )
 
-                # Select random background color if enabled
-                current_bg_color = bg_color
-                if cfg.use_random_backgrounds:
-                    current_bg_color = get_random_background_color()
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_text = {
+            executor.submit(generate_single_text, text, generation_cfg): text
+            for text in texts[:num_examples]
+        }
 
-                # Select random font color if enabled
-                if cfg.use_random_font_colors:
-                    font_color = get_random_font_color(current_bg_color)
+        # Process completed tasks with progress bar
+        for future in tqdm(
+            as_completed(future_to_text),
+            total=len(future_to_text),
+            desc="Processing texts",
+            unit="text",
+        ):
+            try:
+                image_data_list, num_splits = future.result()
+                total_splits += num_splits
+                split_texts += 1 if num_splits > 1 else 0
 
-                if cfg.num_columns is not None and cfg.num_columns > 0:
-                    num_columns = cfg.num_columns
-                else:
-                    num_columns = random.randint(*column_range)
-
-                if cfg.column_width is not None and cfg.column_width > 0:
-                    column_width = cfg.column_width
-                else:
-                    column_width = random.randint(*column_width_range)
-
-                image, fitted_text, paragraph_bboxes = create_image_with_text(
-                    remaining_text,
-                    image_size=(width, height),
-                    alignment=alignment,
-                    font_size=font_size,
-                    font_path=current_font_path,
-                    bg_color=current_bg_color,
-                    font_color=font_color,
-                    vertical_alignment=vertical_alignment,
-                    dpi=dpi,
-                    num_columns=num_columns,
-                    column_gap=cfg.column_gap,
-                    column_width=column_width,
-                )
-
-                transformed_image, transformation_meta, transformed_paragraph_bboxes = (
-                    apply_random_transformation(
-                        image,
-                        current_bg_color,
-                        paragraph_bboxes=paragraph_bboxes,
+                for image_data in image_data_list:
+                    new_data[cfg.text_column].append(image_data.text)
+                    new_data["image"].append(image_data.image)
+                    new_data["font_path"].append(image_data.font_path)
+                    new_data["bg_color"].append(image_data.bg_color)
+                    new_data["font_color"].append(image_data.font_color)
+                    new_data["font_size"].append(image_data.font_size)
+                    new_data["image_width"].append(image_data.image_width)
+                    new_data["image_height"].append(image_data.image_height)
+                    new_data["image_dpi"].append(image_data.image_dpi)
+                    new_data["text_vertical_alignment"].append(
+                        image_data.text_vertical_alignment
                     )
-                )
+                    new_data["text_horizontal_alignment"].append(
+                        image_data.text_horizontal_alignment
+                    )
+                    new_data["paragraph_bboxes"].append(image_data.paragraph_bboxes)
+                    new_data["transformation"].append(image_data.transformation)
+            except Exception as e:
+                logger.error(f"Error processing text: {e}")
+                continue
 
-                if not fitted_text:
-                    # No text could be fitted, break to avoid infinite loop
-                    break
-
-                new_data[cfg.text_column].append(fitted_text)
-                new_data["image"].append(transformed_image)
-                new_data["font_path"].append(current_font_path)
-                new_data["bg_color"].append(current_bg_color)
-                new_data["font_color"].append(font_color)
-                new_data["font_size"].append(font_size)
-                new_data["image_width"].append(width)
-                new_data["image_height"].append(height)
-                new_data["image_dpi"].append(dpi)
-                new_data["text_vertical_alignment"].append(vertical_alignment)
-                new_data["text_horizontal_alignment"].append(alignment)
-                new_data["paragraph_bboxes"].append(transformed_paragraph_bboxes)
-                new_data["transformation"].append(transformation_meta)
-
-                # Update remaining text
-                # This assumes create_image_with_text preserves original whitespace
-                # and returns a prefix of the input text.
-                remaining_text = remaining_text[len(fitted_text) :].lstrip()
-
-    logger.info(f"Split {total_splits} long texts into multiple chunks")
+    logger.info(
+        f"Split {split_texts} long texts into multiple chunks, in total generating {total_splits} images from {len(texts)}."
+    )
 
     # Create a new Hugging Face Dataset
     image_dataset = Dataset.from_dict(new_data).cast_column("image", Image())
