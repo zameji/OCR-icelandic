@@ -3,6 +3,8 @@ temp
 .gradio
 logs
 models
+synthetic_output
+gold_data
 isl_synthetic_ocr_output
 fonts
 
