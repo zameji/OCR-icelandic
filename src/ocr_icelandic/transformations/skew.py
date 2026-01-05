@@ -21,8 +21,13 @@ def _skew_within_bounds(
     # Create large canvas
     pad_x = int(max_shift) + 40
     canvas_width = width + pad_x * 2
-    canvas = Image.new("RGB", (canvas_width, height), bg_color)
-    canvas.paste(image, (pad_x, 0))
+    # Use RGBA to preserve transparency
+    if isinstance(bg_color, tuple) and len(bg_color) == 3:
+        bg_rgba = bg_color + (255,)
+    else:
+        bg_rgba = bg_color
+    canvas = Image.new("RGBA", (canvas_width, height), bg_rgba)
+    canvas.paste(image, (pad_x, 0), image if image.mode == "RGBA" else None)
 
     # Apply skew
     matrix = (1, dx, 0, 0, 1, 0)
@@ -31,7 +36,7 @@ def _skew_within_bounds(
         Image.Transform.AFFINE,
         matrix,
         resample=Image.Resampling.BICUBIC,
-        fillcolor=bg_color,
+        fillcolor=bg_rgba,
     )
 
     # Find center and crop expanded area

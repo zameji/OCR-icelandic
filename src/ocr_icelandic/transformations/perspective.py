@@ -32,8 +32,13 @@ def _apply_perspective_distortion(
     pad = max(width, height) // 2  # Dynamic padding based on image size
     canvas_width = width + pad * 2
     canvas_height = height + pad * 2
-    canvas = Image.new("RGB", (canvas_width, canvas_height), bg_color)
-    canvas.paste(image, (pad, pad))
+    # Use RGBA to preserve transparency
+    if isinstance(bg_color, tuple) and len(bg_color) == 3:
+        bg_rgba = bg_color + (255,)
+    else:
+        bg_rgba = bg_color
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), bg_rgba)
+    canvas.paste(image, (pad, pad), image if image.mode == "RGBA" else None)
 
     # Define the four corners of the original image on the canvas
     # Top-left, top-right, bottom-right, bottom-left
@@ -172,7 +177,7 @@ def _apply_perspective_distortion(
         Image.Transform.PERSPECTIVE,
         coeffs,
         resample=Image.Resampling.BICUBIC,
-        fillcolor=bg_color,
+        fillcolor=bg_rgba,
     )
 
     # Find bounding box of the transformed content

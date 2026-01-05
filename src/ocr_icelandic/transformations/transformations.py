@@ -9,6 +9,7 @@ from ocr_icelandic.transformations.perspective import perspective
 from ocr_icelandic.transformations.rotate import rotate
 from ocr_icelandic.transformations.shared import _copy_paragraph_bboxes
 from ocr_icelandic.transformations.skew import skew
+from ocr_icelandic.transformations.tight_crop import tight_crop
 
 
 def blur(
@@ -53,9 +54,12 @@ def ink_splashes(
 
         # Composite onto overlay
         overlay = Image.alpha_composite(overlay, splash)
-    combined = Image.alpha_composite(image.convert("RGBA"), overlay)
+    # Ensure image is RGBA
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+    combined = Image.alpha_composite(image, overlay)
     return (
-        combined.convert("RGB"),
+        combined,
         {
             "transformation": "ink_splashes",
             "splashes": splashes,
@@ -94,9 +98,12 @@ def textured_stains(
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     overlay.paste(stain, (pos_x, pos_y), stain)
 
-    combined = Image.alpha_composite(image.convert("RGBA"), overlay)
+    # Ensure image is RGBA
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+    combined = Image.alpha_composite(image, overlay)
     return (
-        combined.convert("RGB"),
+        combined,
         {
             "transformation": "coffee_stains",
             "position": (pos_x, pos_y),
@@ -118,7 +125,7 @@ def dusty_paper(
     grain_size = random.randint(1, 3)
     intensity = random.uniform(0.05, 0.15)
     noise = Image.effect_noise(image.size, grain_size * 10)
-    grainy_overlay = noise.convert("RGB")
+    grainy_overlay = noise.convert("RGBA" if image.mode == "RGBA" else "RGB")
     dusty_image = Image.blend(image, grainy_overlay, intensity)
     return (
         dusty_image,
@@ -204,8 +211,18 @@ def reverse_bleed_through(
     intensity = np.random.uniform(
         0.01, 0.04
     )  # Adjust intensity of the bleed-through effect
-    # Convert PIL image to numpy array
-    img_array = np.array(image)
+
+    # Store original alpha channel if present
+    has_alpha = image.mode == "RGBA"
+    if has_alpha:
+        alpha_channel = image.split()[3]
+
+    # Convert PIL image to numpy array (RGB only for processing)
+    if has_alpha:
+        img_rgb = image.convert("RGB")
+        img_array = np.array(img_rgb)
+    else:
+        img_array = np.array(image)
 
     # Flip the image horizontally
     flipped = cv2.flip(img_array, 1)
@@ -253,8 +270,15 @@ def reverse_bleed_through(
         )
 
     result = np.clip(result, 0, 255).astype(np.uint8)
+    result_image = Image.fromarray(result)
+
+    # Restore alpha channel if original had it
+    if has_alpha:
+        result_image = result_image.convert("RGBA")
+        result_image.putalpha(alpha_channel)
+
     return (
-        Image.fromarray(result),
+        result_image,
         {
             "transformation": "reverse_bleed_through",
             "intensity": round(intensity, 3),
@@ -330,7 +354,7 @@ def shadow_overlay(
     image = Image.alpha_composite(image, shadow)
 
     return (
-        image.convert("RGB"),
+        image,
         {
             "transformation": "shadow_overlay",
             "edge": edge,
@@ -353,6 +377,7 @@ PERSPECTIVE_TRANSFORMATIONS = [
     rotate,
     skew,
     perspective,
+    tight_crop,
 ]
 POSTPROCESSING_TRANSFORMATIONS = [
     light_reflection,
@@ -372,6 +397,10 @@ def apply_random_transformation(
 ) -> tuple[Image.Image, list[dict], list[dict]]:
     paragraph_bboxes_copy = _copy_paragraph_bboxes(paragraph_bboxes)
 
+    # Convert to RGBA at the start of the pipeline
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+
     transformations_to_apply = [
         *_get_random_subset(CONTENT_TRANSFORMATIONS),
         *_get_random_subset(PERSPECTIVE_TRANSFORMATIONS),
@@ -385,5 +414,14 @@ def apply_random_transformation(
         )
 
         transformation_meta.append(meta)
+
+    # Composite RGBA onto background color at the end
+    background = Image.new("RGB", image.size, bg_color)
+    if image.mode == "RGBA":
+        background.paste(image, (0, 0), image)
+        image = background
+    else:
+        # Fallback if transformation returned non-RGBA
+        image = image.convert("RGB")
 
     return image, transformation_meta, paragraph_bboxes_copy

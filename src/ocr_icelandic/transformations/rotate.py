@@ -28,15 +28,20 @@ def _rotate_within_bounds(
     pad = max(max_width - width, max_height - height) // 2 + 20
     canvas_width = width + pad * 2
     canvas_height = height + pad * 2
-    canvas = Image.new("RGB", (canvas_width, canvas_height), bg_color)
-    canvas.paste(image, (pad, pad))
+    # Use RGBA to preserve transparency
+    if isinstance(bg_color, tuple) and len(bg_color) == 3:
+        bg_rgba = bg_color + (255,)
+    else:
+        bg_rgba = bg_color
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), bg_rgba)
+    canvas.paste(image, (pad, pad), image if image.mode == "RGBA" else None)
 
     # Rotate
     rotated = canvas.rotate(
         angle,
         resample=Image.Resampling.BICUBIC,
         expand=True,
-        fillcolor=bg_color,
+        fillcolor=bg_rgba,
     )
 
     # Crop from center
