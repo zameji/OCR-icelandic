@@ -401,21 +401,21 @@ def apply_random_transformation(
     if image.mode != "RGBA":
         image = image.convert("RGBA")
 
-    transformations_to_apply = [
+    # Apply content and perspective transformations with RGBA
+    pre_composite_transformations = [
         *_get_random_subset(CONTENT_TRANSFORMATIONS),
         *_get_random_subset(PERSPECTIVE_TRANSFORMATIONS),
-        *_get_random_subset(POSTPROCESSING_TRANSFORMATIONS),
     ]
 
     transformation_meta: list[dict] = []
-    for transform in transformations_to_apply:
+    for transform in pre_composite_transformations:
         image, meta, paragraph_bboxes_copy = transform(
             image, bg_color, paragraph_bboxes_copy
         )
 
         transformation_meta.append(meta)
 
-    # Composite RGBA onto background color at the end
+    # Composite RGBA onto background color
     background = Image.new("RGB", image.size, bg_color)
     if image.mode == "RGBA":
         background.paste(image, (0, 0), image)
@@ -423,5 +423,14 @@ def apply_random_transformation(
     else:
         # Fallback if transformation returned non-RGBA
         image = image.convert("RGB")
+
+    # Apply postprocessing transformations after background composite
+    postprocessing_transformations = _get_random_subset(POSTPROCESSING_TRANSFORMATIONS)
+    for transform in postprocessing_transformations:
+        image, meta, paragraph_bboxes_copy = transform(
+            image, bg_color, paragraph_bboxes_copy
+        )
+
+        transformation_meta.append(meta)
 
     return image, transformation_meta, paragraph_bboxes_copy
