@@ -6,6 +6,7 @@ Saves the new dataset to disk and optionally pushes it to the Hugging Face Hub.
 
 from collections import defaultdict
 import logging
+import os
 import random
 import sys
 from dataclasses import asdict, dataclass
@@ -13,8 +14,11 @@ from pathlib import Path
 from typing import cast
 
 from datasets import Dataset, DatasetDict, Image, load_dataset
-from fontTools.ttLib import TTFont
 import psutil
+from ocr_icelandic.fonts import (
+    get_icelandic_compatible_fonts,
+    sync_google_fonts,
+)
 from ocr_icelandic.transformations import apply_random_transformation
 from ocr_icelandic.utils import create_image_with_text
 from omegaconf import OmegaConf
@@ -54,7 +58,7 @@ class DataConfig:
     text_vertical_alignment: str = "center"  # top, middle, bottom
     text_horizontal_alignment: str = "left"  # left, center, right
     output_path: str = "isl_synthetic_ocr_output"  # Directory to save dataset
-    num_examples: int = 0  # Number of examples to generate
+    num_examples: int = 2  # Number of examples to generate
     push_to_hub: bool = False  # Whether to push dataset to Hugging Face Hub
     save_to_disk: bool = False  # Whether to save dataset to disk
     hub_repo_id: str = (
@@ -62,6 +66,7 @@ class DataConfig:
     )
     use_random_fonts: bool = True  # Whether to use random fonts
     use_random_backgrounds: bool = True  # Whether to use random background colors
+    google_fonts_directory: str = "./google_fonts"  # Directory to store Google Fonts
     max_text_length: int = 2000  # Maximum characters per text before splitting
     column_gap: int = 20  # Horizontal gap in pixels between columns
     num_columns: int | None = (
@@ -192,64 +197,6 @@ def split_long_text(text: str, max_length: int) -> list[str]:
     return chunks
 
 
-def check_font_supports_char(fontpath, unicode_char):
-    font = TTFont(fontpath)  # specify the path to the font in question
-
-    for cmap in font["cmap"].tables:
-        if cmap.isUnicode():
-            if ord(unicode_char) in cmap.cmap:
-                return True
-    return False
-
-
-def get_icelandic_compatible_fonts():
-    # load fonts from font directory
-
-    random.seed(42)  # For reproducibility
-
-    # Check common font directories based on OS
-    current_os = sys.platform
-
-    font_dirs = []
-
-    # macos
-    if current_os.startswith("darwin"):
-        font_dirs = [
-            "/System/Library/Fonts",
-            "/System/Library/Fonts/Supplemental",
-        ]
-    # linux
-    if current_os.startswith("linux"):
-        font_dirs += [
-            "/usr/share/fonts",
-            "/usr/local/share/fonts",
-        ]
-    # windows
-    if current_os.startswith("win"):
-        font_dirs += [
-            str(Path.home() / "AppData/Local/Microsoft/Windows/Fonts"),
-            str(Path.home() / "AppData/Roaming/Microsoft/Windows/Fonts"),
-            "C:/Windows/Fonts",
-        ]
-
-    logger.info(f"Searching for fonts in directories: {font_dirs}")
-
-    available_fonts: list[str] = []
-    characters_to_check = "ÁáÐðÉéÍíÓóÚúÝýÞþÆæÖö"
-    for font_dir in tqdm(font_dirs, desc="Scanning font directories"):
-        font_path = Path(font_dir)
-        if font_path.exists() and font_path.is_dir():
-            for font_file in font_path.rglob("*.[tT][tT][fF]"):
-                for char in characters_to_check:
-                    if check_font_supports_char(font_file, char):
-                        available_fonts.append(str(font_file))
-                        break  # No need to check other characters for this font
-
-    logger.info(f"Found {len(available_fonts)} Icelandic-compatible fonts.")
-
-    return available_fonts
-
-
 def _normalize_range(
     min_value: int, max_value: int, minimum: int = 1
 ) -> tuple[int, int]:
@@ -378,9 +325,22 @@ def generate_image_dataset(texts: list[str], cfg: DataConfig) -> Dataset:
     # fix number of examples to generate if specified
     num_examples = cfg.num_examples if cfg.num_examples > 0 else len(texts)
 
+    # Check for Google Fonts API key and sync fonts if available
+    google_fonts_api_key = os.environ.get("GOOGLE_FONTS_API_KEY")
+    if google_fonts_api_key:
+        logger.info("GOOGLE_FONTS_API_KEY found, syncing Google Fonts...")
+        sync_google_fonts(google_fonts_api_key, cfg.google_fonts_directory)
+    else:
+        logger.warning(
+            "GOOGLE_FONTS_API_KEY environment variable not set. "
+            "Skipping Google Fonts sync and using only system fonts."
+        )
+
     available_fonts = None
     if cfg.use_random_fonts:
-        available_fonts = get_icelandic_compatible_fonts()
+        available_fonts = get_icelandic_compatible_fonts(
+            google_fonts_directory=cfg.google_fonts_directory
+        )
 
     column_range = _normalize_range(cfg.min_num_columns, cfg.max_num_columns, minimum=1)
     column_width_range = _normalize_range(
