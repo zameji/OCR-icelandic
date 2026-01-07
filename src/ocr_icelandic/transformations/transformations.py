@@ -433,8 +433,8 @@ def apply_random_transformation(
     Apply random transformations to an image.
 
     Args:
-        image: Input image
-        bg_color: Background color
+        image: Input RGBA image
+        bg_color: Background color (kept for API compatibility, passed to transformations but not used)
         paragraph_bboxes: Optional bounding boxes to transform
         use_background: Whether a background image will be used
         background_has_shadow: If True, background receives shadows (close background);
@@ -443,11 +443,8 @@ def apply_random_transformation(
                               e.g., {"blur": 0.5, "rotate": 0.8}
 
     Returns:
-        Tuple of (transformed image, transformation metadata, transformed bboxes)
+        Tuple of (transformed RGBA image, transformation metadata, transformed bboxes)
     """
-    if image.mode != "RGBA":
-        image = image.convert("RGBA")
-
     paragraph_bboxes_copy = _copy_paragraph_bboxes(paragraph_bboxes)
 
     transformations_to_apply = []
@@ -508,16 +505,7 @@ def apply_random_transformation(
         image, meta, paragraph_bboxes_copy = transform(
             image, bg_color, paragraph_bboxes_copy
         )
-
         transformation_meta.append(meta)
 
-    # Composite RGBA onto background color
-    background = Image.new("RGB", image.size, bg_color)
-    if image.mode == "RGBA":
-        background.paste(image, (0, 0), image)
-        image = background
-    else:
-        # Fallback if transformation returned non-RGBA
-        image = image.convert("RGB")
-
+    # Return RGBA image directly (no RGB composite here)
     return image, transformation_meta, paragraph_bboxes_copy

@@ -10,9 +10,7 @@ from ocr_icelandic.transformations.shared import (
 )
 
 
-def _rotate_within_bounds(
-    image: Image.Image, bg_color: str | tuple[int, int, int], angle: float
-) -> tuple[Image.Image, dict]:
+def _rotate_within_bounds(image: Image.Image, angle: float) -> tuple[Image.Image, dict]:
     width, height = image.size
 
     # Calculate how much the corners can expand when rotated
@@ -24,24 +22,19 @@ def _rotate_within_bounds(
     max_width = int(width * cos_a + height * sin_a)
     max_height = int(width * sin_a + height * cos_a)
 
-    # Create canvas large enough for rotation
+    # Create canvas large enough for rotation with transparent background
     pad = max(max_width - width, max_height - height) // 2 + 20
     canvas_width = width + pad * 2
     canvas_height = height + pad * 2
-    # Use RGBA to preserve transparency
-    if isinstance(bg_color, tuple) and len(bg_color) == 3:
-        bg_rgba = bg_color + (255,)
-    else:
-        bg_rgba = bg_color
-    canvas = Image.new("RGBA", (canvas_width, canvas_height), bg_rgba)
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
     canvas.paste(image, (pad, pad), image if image.mode == "RGBA" else None)
 
-    # Rotate
+    # Rotate with transparent fill
     rotated = canvas.rotate(
         angle,
         resample=Image.Resampling.BICUBIC,
         expand=True,
-        fillcolor=bg_rgba,
+        fillcolor=(0, 0, 0, 0),
     )
 
     # Crop from center
@@ -160,10 +153,16 @@ def rotate(
     bg_color: str | tuple[int, int, int],
     paragraph_bboxes: list[dict] | None = None,
 ) -> tuple[Image.Image, dict, list[dict]]:
+    """
+    Apply rotation transformation with transparent background.
+
+    Note: bg_color parameter is kept for API compatibility but not used.
+    The transformation uses transparent fills to preserve alpha channel.
+    """
     paragraph_bboxes_copy = _copy_paragraph_bboxes(paragraph_bboxes)
 
     angle = random.uniform(-5, 5)
-    rotated, rotate_meta = _rotate_within_bounds(image, bg_color, angle)
+    rotated, rotate_meta = _rotate_within_bounds(image, angle)
     transformed_bboxes = _transform_paragraph_bboxes_for_rotation(
         paragraph_bboxes_copy, rotate_meta
     )

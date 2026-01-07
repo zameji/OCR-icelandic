@@ -3,7 +3,7 @@
 
 import os
 import pytest
-from src.ocr_icelandic.utils import create_image_with_text
+from ocr_icelandic.utils import create_image_with_text
 
 # Test case 1: Very long word that shouldn't fit in multiple narrow columns
 TEST_TEXT_1 = "This is a test with a verylongwordthatdefinitelywontfitinasinglecolumnandwillcauseoverflow and some normal words."

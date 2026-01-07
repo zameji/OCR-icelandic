@@ -11,15 +11,13 @@ from ocr_icelandic.transformations.shared import (
 
 def _apply_perspective_distortion(
     image: Image.Image,
-    bg_color: str | tuple[int, int, int],
     distortion_type: str = "book_curve",
 ) -> tuple[Image.Image, dict]:
     """
     Apply perspective distortion to simulate book curvature or camera angles.
 
     Args:
-        image: Input image
-        bg_color: Background color for filling
+        image: Input image (should be RGBA)
         distortion_type: Type of distortion ("book_curve", "camera_angle", or "combined")
 
     Returns:
@@ -32,12 +30,8 @@ def _apply_perspective_distortion(
     pad = max(width, height) // 2  # Dynamic padding based on image size
     canvas_width = width + pad * 2
     canvas_height = height + pad * 2
-    # Use RGBA to preserve transparency
-    if isinstance(bg_color, tuple) and len(bg_color) == 3:
-        bg_rgba = bg_color + (255,)
-    else:
-        bg_rgba = bg_color
-    canvas = Image.new("RGBA", (canvas_width, canvas_height), bg_rgba)
+    # Use transparent background to preserve alpha channel
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
     canvas.paste(image, (pad, pad), image if image.mode == "RGBA" else None)
 
     # Define the four corners of the original image on the canvas
@@ -172,17 +166,17 @@ def _apply_perspective_distortion(
     # PIL expects coefficients that map from destination to source (inverse mapping)
     inverse_coeffs = _find_perspective_coefficients(dst_points, src_points)
 
-    # Apply perspective transformation
+    # Apply perspective transformation with transparent fill
     transformed = canvas.transform(
         canvas.size,
         Image.Transform.PERSPECTIVE,
         inverse_coeffs,
         resample=Image.Resampling.BICUBIC,
-        fillcolor=bg_rgba,
+        fillcolor=(0, 0, 0, 0),
     )
 
-    # Find bounding box of the transformed content
-    bbox = _find_content_bbox(transformed, bg_color)
+    # Find bounding box of the transformed content (using alpha channel)
+    bbox = _find_content_bbox(transformed)
 
     # Crop and resize back to original dimensions
     if bbox:
@@ -285,21 +279,22 @@ def _solve_linear_system(matrix: list[list[float]], b: list[float]) -> list[floa
 
 def _find_content_bbox(
     image: Image.Image,
-    bg_color: str | tuple[int, int, int],
-    threshold: int = 20,
+    alpha_threshold: int = 10,
 ) -> tuple[int, int, int, int] | None:
     """
-    Find the bounding box of non-background content in the image.
+    Find the bounding box of non-transparent content in the image.
+
+    Args:
+        image: RGBA image
+        alpha_threshold: Minimum alpha value to consider as content (0-255)
+
+    Returns:
+        Bounding box (min_x, min_y, max_x, max_y) or None if no content found
     """
-    # Convert bg_color to RGB tuple if it's a string
-    if isinstance(bg_color, str):
-        from PIL import ImageColor
+    # Ensure image is RGBA
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
 
-        bg_rgb = ImageColor.getrgb(bg_color)
-    else:
-        bg_rgb = bg_color
-
-    # Convert to numpy-like processing
     pixels = image.load()
     if pixels is None:
         return None
@@ -313,12 +308,11 @@ def _find_content_bbox(
     for y in range(height):
         for x in range(width):
             pixel = pixels[x, y]
-            if not isinstance(pixel, tuple) or len(pixel) < 3:
+            if not isinstance(pixel, tuple) or len(pixel) < 4:
                 continue
-            r, g, b = pixel[0], pixel[1], pixel[2]
-            # Check if pixel is significantly different from background
-            diff = abs(r - bg_rgb[0]) + abs(g - bg_rgb[1]) + abs(b - bg_rgb[2])
-            if diff > threshold:
+            # Check alpha channel - if pixel is not transparent, it's content
+            alpha = pixel[3]
+            if alpha > alpha_threshold:
                 found_content = True
                 min_x = min(min_x, x)
                 min_y = min(min_y, y)
@@ -440,11 +434,17 @@ def perspective(
     bg_color: str | tuple[int, int, int],
     paragraph_bboxes: list[dict] | None = None,
 ) -> tuple[Image.Image, dict, list[dict]]:
+    """
+    Apply perspective transformation with transparent background.
+
+    Note: bg_color parameter is kept for API compatibility but not used.
+    The transformation uses transparent fills to preserve alpha channel.
+    """
     paragraph_bboxes_copy = _copy_paragraph_bboxes(paragraph_bboxes)
 
     perspective_type = random.choice(["book_curve", "camera_angle", "combined"])
     perspective_img, perspective_meta = _apply_perspective_distortion(
-        image, bg_color, perspective_type
+        image, perspective_type
     )
     transformed_bboxes = _transform_paragraph_bboxes_for_perspective(
         paragraph_bboxes_copy, perspective_meta

@@ -6,10 +6,8 @@ Cache entries are automatically invalidated when font files are modified.
 
 import hashlib
 import sqlite3
-import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 class FontCompatibilityCache:
@@ -45,6 +43,8 @@ class FontCompatibilityCache:
     def _init_database(self) -> None:
         """Create database tables if they don't exist."""
         with sqlite3.connect(self.db_path) as conn:
+            # Enable foreign key constraints
+            conn.execute("PRAGMA foreign_keys = ON")
             # Schema version tracking
             conn.execute(
                 """
@@ -142,7 +142,7 @@ class FontCompatibilityCache:
 
     def get_cached_compatibility(
         self, font_path: str, language_code: str
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """Check if font compatibility is cached and still valid.
 
         Validates cache entry by comparing file hash, size, and modification time.
@@ -173,6 +173,8 @@ class FontCompatibilityCache:
             current_hash = self._compute_file_hash(font_path_obj)
 
             with sqlite3.connect(self.db_path) as conn:
+                # Enable foreign key constraints
+                conn.execute("PRAGMA foreign_keys = ON")
                 conn.row_factory = sqlite3.Row
 
                 # Check if we have a cached result
@@ -241,20 +243,48 @@ class FontCompatibilityCache:
             now = datetime.now().isoformat()
 
             with sqlite3.connect(self.db_path) as conn:
-                # Insert or update font file record
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO font_files
-                    (file_path, file_hash, file_size, file_mtime, last_checked)
-                    VALUES (?, ?, ?, ?, ?)
-                """,
-                    (str(font_path), file_hash, file_size, file_mtime, now),
-                )
+                # Enable foreign key constraints
+                conn.execute("PRAGMA foreign_keys = ON")
 
-                # Get font file ID
-                font_file_id = conn.execute(
-                    "SELECT id FROM font_files WHERE file_path = ?", (str(font_path),)
-                ).fetchone()[0]
+                # Check if font file entry exists with matching metadata
+                existing = conn.execute(
+                    """
+                    SELECT id, file_hash, file_size, file_mtime
+                    FROM font_files
+                    WHERE file_path = ?
+                    """,
+                    (str(font_path),),
+                ).fetchone()
+
+                if (
+                    existing
+                    and existing[1] == file_hash
+                    and existing[2] == file_size
+                    and existing[3] == file_mtime
+                ):
+                    # Metadata matches - reuse existing entry
+                    font_file_id = existing[0]
+                    # Update last_checked timestamp
+                    conn.execute(
+                        "UPDATE font_files SET last_checked = ? WHERE id = ?",
+                        (now, font_file_id),
+                    )
+                else:
+                    # Either doesn't exist or metadata changed - replace it
+                    # If it exists with different metadata, this will cascade delete old compatibility records
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO font_files
+                        (file_path, file_hash, file_size, file_mtime, last_checked)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (str(font_path), file_hash, file_size, file_mtime, now),
+                    )
+                    # Get the new font file ID
+                    font_file_id = conn.execute(
+                        "SELECT id FROM font_files WHERE file_path = ?",
+                        (str(font_path),),
+                    ).fetchone()[0]
 
                 # Insert or update compatibility record
                 conn.execute(
@@ -295,6 +325,8 @@ class FontCompatibilityCache:
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
+                # Enable foreign key constraints
+                conn.execute("PRAGMA foreign_keys = ON")
                 results = conn.execute(
                     """
                     SELECT ff.file_path
@@ -346,6 +378,8 @@ class FontCompatibilityCache:
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
+                # Enable foreign key constraints
+                conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute(
                     """
                     INSERT INTO scan_history
@@ -370,7 +404,7 @@ class FontCompatibilityCache:
             # Silently fail on recording errors
             pass
 
-    def clear_cache(self, language_code: Optional[str] = None) -> None:
+    def clear_cache(self, language_code: str | None = None) -> None:
         """Clear cache entries.
 
         Args:
@@ -384,6 +418,8 @@ class FontCompatibilityCache:
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
+                # Enable foreign key constraints
+                conn.execute("PRAGMA foreign_keys = ON")
                 if language_code:
                     # Clear only specific language
                     conn.execute(
@@ -431,6 +467,8 @@ class FontCompatibilityCache:
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
+                # Enable foreign key constraints
+                conn.execute("PRAGMA foreign_keys = ON")
                 conn.row_factory = sqlite3.Row
 
                 total_fonts = conn.execute(
@@ -477,7 +515,9 @@ class FontCompatibilityCache:
                     for row in recent_scans
                 ]
 
-                db_size_kb = self.db_path.stat().st_size / 1024 if self.db_path.exists() else 0
+                db_size_kb = (
+                    self.db_path.stat().st_size / 1024 if self.db_path.exists() else 0
+                )
 
                 return {
                     "total_fonts": total_fonts,
@@ -508,6 +548,8 @@ class FontCompatibilityCache:
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
+                # Enable foreign key constraints
+                conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute("VACUUM")
                 conn.commit()
         except sqlite3.Error:

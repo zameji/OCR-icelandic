@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from src.ocr_icelandic.font_cache import FontCompatibilityCache
-from src.ocr_icelandic.language_support import (
+from ocr_icelandic.font_cache import FontCompatibilityCache
+from ocr_icelandic.language_support import (
     LanguageCharacterSet,
     LanguageRegistry,
 )

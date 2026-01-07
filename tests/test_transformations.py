@@ -4,8 +4,8 @@
 import os
 import pytest
 from PIL import Image
-from src.ocr_icelandic.utils import create_image_with_text
-from src.ocr_icelandic.transformations.transformations import (
+from ocr_icelandic.utils import create_image_with_text
+from ocr_icelandic.transformations.transformations import (
     blur,
     ink_splashes,
     dusty_paper,
@@ -15,9 +15,9 @@ from src.ocr_icelandic.transformations.transformations import (
     shadow_overlay,
     apply_random_transformation,
 )
-from src.ocr_icelandic.transformations.rotate import rotate
-from src.ocr_icelandic.transformations.skew import skew
-from src.ocr_icelandic.transformations.perspective import perspective
+from ocr_icelandic.transformations.rotate import rotate
+from ocr_icelandic.transformations.skew import skew
+from ocr_icelandic.transformations.perspective import perspective
 
 
 # Test fixtures

@@ -15,7 +15,7 @@ from syrupy.assertion import SnapshotAssertion
 from syrupy.extensions.amber import AmberSnapshotExtension
 from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
-from src.ocr_icelandic.utils import create_image_with_text
+from ocr_icelandic.utils import create_image_with_text
 
 
 # ============================================================================
@@ -165,12 +165,12 @@ class TestRotateSnapshots:
 
         # Override random angle with fixed value
         angle = 3.5
-        from src.ocr_icelandic.transformations.rotate import _rotate_within_bounds
+        from ocr_icelandic.transformations.rotate import _rotate_within_bounds
 
         rotated_img, meta = _rotate_within_bounds(image, "white", angle)
 
         # Import transform function to get transformed bboxes
-        from src.ocr_icelandic.transformations.rotate import (
+        from ocr_icelandic.transformations.rotate import (
             _transform_paragraph_bboxes_for_rotation,
         )
 
@@ -192,7 +192,7 @@ class TestRotateSnapshots:
         random.seed(42)
         angle = -2.8
 
-        from src.ocr_icelandic.transformations.rotate import (
+        from ocr_icelandic.transformations.rotate import (
             _rotate_within_bounds,
             _transform_paragraph_bboxes_for_rotation,
         )
@@ -212,7 +212,7 @@ class TestRotateSnapshots:
         random.seed(100)
         angle = 4.2
 
-        from src.ocr_icelandic.transformations.rotate import (
+        from ocr_icelandic.transformations.rotate import (
             _rotate_within_bounds,
             _transform_paragraph_bboxes_for_rotation,
         )
@@ -239,7 +239,7 @@ class TestSkewSnapshots:
         random.seed(42)
         dx = 0.15
 
-        from src.ocr_icelandic.transformations.skew import (
+        from ocr_icelandic.transformations.skew import (
             _skew_within_bounds,
             _transform_paragraph_bboxes_for_skew,
         )
@@ -257,7 +257,7 @@ class TestSkewSnapshots:
         random.seed(42)
         dx = -0.12
 
-        from src.ocr_icelandic.transformations.skew import (
+        from ocr_icelandic.transformations.skew import (
             _skew_within_bounds,
             _transform_paragraph_bboxes_for_skew,
         )
@@ -275,7 +275,7 @@ class TestSkewSnapshots:
         random.seed(42)
         dx = 0.05
 
-        from src.ocr_icelandic.transformations.skew import (
+        from ocr_icelandic.transformations.skew import (
             _skew_within_bounds,
             _transform_paragraph_bboxes_for_skew,
         )
@@ -295,7 +295,7 @@ class TestSkewSnapshots:
         random.seed(100)
         dx = -0.18
 
-        from src.ocr_icelandic.transformations.skew import (
+        from ocr_icelandic.transformations.skew import (
             _skew_within_bounds,
             _transform_paragraph_bboxes_for_skew,
         )
@@ -321,7 +321,7 @@ class TestPerspectiveSnapshots:
 
         random.seed(42)
 
-        from src.ocr_icelandic.transformations.perspective import (
+        from ocr_icelandic.transformations.perspective import (
             _apply_perspective_distortion,
             _transform_paragraph_bboxes_for_perspective,
         )
@@ -343,7 +343,7 @@ class TestPerspectiveSnapshots:
         # Seed to force "top" angle type
         random.seed(10)
 
-        from src.ocr_icelandic.transformations.perspective import (
+        from ocr_icelandic.transformations.perspective import (
             _apply_perspective_distortion,
             _transform_paragraph_bboxes_for_perspective,
         )
@@ -365,7 +365,7 @@ class TestPerspectiveSnapshots:
         # Seed to force "left" angle type
         random.seed(15)
 
-        from src.ocr_icelandic.transformations.perspective import (
+        from ocr_icelandic.transformations.perspective import (
             _apply_perspective_distortion,
             _transform_paragraph_bboxes_for_perspective,
         )
@@ -384,7 +384,7 @@ class TestPerspectiveSnapshots:
 
         random.seed(50)
 
-        from src.ocr_icelandic.transformations.perspective import (
+        from ocr_icelandic.transformations.perspective import (
             _apply_perspective_distortion,
             _transform_paragraph_bboxes_for_perspective,
         )
@@ -405,7 +405,7 @@ class TestPerspectiveSnapshots:
 
         random.seed(100)
 
-        from src.ocr_icelandic.transformations.perspective import (
+        from ocr_icelandic.transformations.perspective import (
             _apply_perspective_distortion,
             _transform_paragraph_bboxes_for_perspective,
         )
@@ -433,7 +433,7 @@ class TestEdgeCaseSnapshots:
 
         angle = 0.1
 
-        from src.ocr_icelandic.transformations.rotate import (
+        from ocr_icelandic.transformations.rotate import (
             _rotate_within_bounds,
             _transform_paragraph_bboxes_for_rotation,
         )
@@ -450,7 +450,7 @@ class TestEdgeCaseSnapshots:
 
         dx = 0.01
 
-        from src.ocr_icelandic.transformations.skew import (
+        from ocr_icelandic.transformations.skew import (
             _skew_within_bounds,
             _transform_paragraph_bboxes_for_skew,
         )
@@ -468,7 +468,7 @@ class TestEdgeCaseSnapshots:
 
         angle = 5.0
 
-        from src.ocr_icelandic.transformations.rotate import (
+        from ocr_icelandic.transformations.rotate import (
             _rotate_within_bounds,
             _transform_paragraph_bboxes_for_rotation,
         )

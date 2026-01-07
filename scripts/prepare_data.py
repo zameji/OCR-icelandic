@@ -132,27 +132,59 @@ class SingleImageData:
 
 
 def get_random_background_color():
-    """Generate a random paper-like background color."""
-    # Choose paper type
-    paper_type = random.choice(["white", "cream", "aged"])
+    """
+    Generate a random background color with weighted distribution.
 
-    if paper_type == "white":
-        base = random.randint(245, 252)
-        r = base + random.randint(-3, 3)
-        g = base + random.randint(-5, 0)
-        b = base + random.randint(-8, 0)
-    elif paper_type == "cream":
-        base = random.randint(235, 245)
-        r = base + random.randint(0, 8)
-        g = base + random.randint(-5, 3)
-        b = base + random.randint(-12, -3)
-    else:  # aged
-        base = random.randint(220, 235)
-        r = base + random.randint(5, 15)
-        g = base + random.randint(0, 10)
-        b = base + random.randint(-15, -5)
+    Distribution: 85% light (paper-like), 10% dark, 5% colorful
 
-    # Clamp values
+    Returns:
+        Tuple[int, int, int]: RGB color tuple
+    """
+    # Weighted random selection: 85% light, 10% dark, 5% colorful
+    rand_val = random.random()
+
+    if rand_val < 0.85:
+        # Light colors (paper-like) - 85% probability
+        paper_type = random.choice(["white", "cream", "aged"])
+
+        if paper_type == "white":
+            base = random.randint(245, 252)
+            r = base + random.randint(-3, 3)
+            g = base + random.randint(-5, 0)
+            b = base + random.randint(-8, 0)
+        elif paper_type == "cream":
+            base = random.randint(235, 245)
+            r = base + random.randint(0, 8)
+            g = base + random.randint(-5, 3)
+            b = base + random.randint(-12, -3)
+        else:  # aged
+            base = random.randint(220, 235)
+            r = base + random.randint(5, 15)
+            g = base + random.randint(0, 10)
+            b = base + random.randint(-15, -5)
+
+    elif rand_val < 0.95:
+        # Dark colors - 10% probability
+        base = random.randint(20, 80)
+        r = base + random.randint(-10, 10)
+        g = base + random.randint(-10, 10)
+        b = base + random.randint(-10, 10)
+
+    else:
+        # Colorful - 5% probability
+        # At least one channel bright (>150), others varied
+        bright_channel = random.randint(0, 2)
+        colors = [0, 0, 0]
+        colors[bright_channel] = random.randint(150, 255)
+
+        # Other channels can be varied
+        for i in range(3):
+            if i != bright_channel:
+                colors[i] = random.randint(30, 220)
+
+        r, g, b = colors
+
+    # Clamp values to valid range
     r = max(0, min(255, r))
     g = max(0, min(255, g))
     b = max(0, min(255, b))
@@ -260,10 +292,15 @@ def generate_single_text(
             if cfg.use_random_fonts and available_fonts:
                 current_font_path = random.choice(available_fonts)
 
-            # Select random background color if enabled
+            # Select random background colors if enabled
+            # paper_bg_color: for initial text rendering
+            # composite_bg_color: for final RGB composite
             current_bg_color = bg_color
+            composite_bg_color = bg_color
             if cfg.use_random_backgrounds:
                 current_bg_color = get_random_background_color()
+                # Generate a separate color for final composite
+                composite_bg_color = get_random_background_color()
 
             # Select random paper texture if enabled
             paper_texture_path = None
@@ -312,7 +349,6 @@ def generate_single_text(
                 # Use background based on probability
                 if random.random() < cfg.background_image_probability:
                     use_background = True
-                    logger.info("Using background image for this sample.")
                     # Choose background type (with/without shadow)
                     all_backgrounds = []
                     if cfg.available_with_shadow_backgrounds:
@@ -342,7 +378,6 @@ def generate_single_text(
 
             # Apply background image if selected
             if use_background and background_path:
-                logger.info(f"Using background image: {background_path}")
                 transformed_image, bg_meta, transformed_paragraph_bboxes = (
                     apply_background_image(
                         transformed_image,
@@ -352,6 +387,20 @@ def generate_single_text(
                 )
                 # Add background metadata to transformations
                 transformation_meta.append({"transformation": "background", **bg_meta})
+
+            # Final composite: Convert RGBA to RGB by pasting on a new background
+            # This happens after all transformations and background application
+            if transformed_image.mode == "RGBA":
+                # Create RGB background with the composite color
+                rgb_background = Image.new(
+                    "RGB", transformed_image.size, composite_bg_color
+                )
+                # Paste RGBA image using its alpha channel as mask
+                rgb_background.paste(transformed_image, (0, 0), transformed_image)
+                transformed_image = rgb_background
+            elif transformed_image.mode != "RGB":
+                # Fallback: convert to RGB
+                transformed_image = transformed_image.convert("RGB")
 
             transformed_image = _visualise_bboxes(
                 transformed_image, transformed_paragraph_bboxes, show_labels=False

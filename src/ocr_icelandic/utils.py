@@ -476,24 +476,40 @@ def create_image_with_text(
     )
     scaled_font_size = int(font_size * scale_factor)
 
-    image = Image.new("RGB", scaled_image_size, color=bg_color)
+    # Convert bg_color to RGBA if it's RGB
+    if isinstance(bg_color, tuple) and len(bg_color) == 3:
+        bg_color_rgba = bg_color + (255,)
+    elif isinstance(bg_color, str):
+        # PIL will handle string colors, but we need RGBA
+        temp_img = Image.new("RGB", (1, 1), color=bg_color)
+        rgb = temp_img.getpixel((0, 0))
+        bg_color_rgba = rgb + (255,)
+    else:
+        bg_color_rgba = bg_color
+
+    image = Image.new("RGBA", scaled_image_size, color=bg_color_rgba)
     image.info["dpi"] = (dpi, dpi)
     draw = ImageDraw.Draw(image)
 
     # Apply paper texture if provided
     if paper_texture_path is not None:
-        # Apply texture preserving background color but adding paper surface details
-        image = apply_paper_texture(image, paper_texture_path, blend_alpha=0.9)
+        # Convert to RGB temporarily for texture application
+        image_rgb = image.convert("RGB")
+        image_rgb = apply_paper_texture(image_rgb, paper_texture_path, blend_alpha=0.9)
+        # Convert back to RGBA
+        image = image_rgb.convert("RGBA")
         draw = ImageDraw.Draw(image)
     else:
         # add gaussian noice to the background to make it more realistic and less uniform
         noise = Image.effect_noise(scaled_image_size, 10)
-        image = Image.blend(image, noise.convert("RGB"), 0.1)
+        noise_rgba = noise.convert("RGBA")
+        image = Image.blend(image, noise_rgba, 0.1)
         draw = ImageDraw.Draw(image)
 
         # add "dirt" texture to the background
         dirt_texture = Image.effect_noise(scaled_image_size, 5)
-        image = Image.blend(image, dirt_texture.convert("RGB"), 0.05)
+        dirt_rgba = dirt_texture.convert("RGBA")
+        image = Image.blend(image, dirt_rgba, 0.05)
         draw = ImageDraw.Draw(image)
 
     font = load_font(font_path=font_path, font_size=scaled_font_size)

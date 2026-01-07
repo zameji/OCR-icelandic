@@ -371,7 +371,7 @@ def create_image_with_text(
 
 **Example Usage:**
 ```python
-from src.ocr_icelandic.utils import create_image_with_text
+from ocr_icelandic.utils import create_image_with_text
 
 image, text, bboxes = create_image_with_text(
     text="Your text here",
@@ -480,7 +480,7 @@ Lines 376-380 show that by default, only `skew()` is applied. The random selecti
 
 **Example:**
 ```python
-from src.ocr_icelandic.transformations import apply_random_transformation
+from ocr_icelandic.transformations import apply_random_transformation
 
 transformed_img, new_bboxes, transforms = apply_random_transformation(
     image=original_image,
