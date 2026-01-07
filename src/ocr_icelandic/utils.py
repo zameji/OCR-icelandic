@@ -31,6 +31,12 @@ class WrappedParagraph:
 
 
 @dataclass
+class WrapResult:
+    paragraphs: list[WrappedParagraph]
+    has_overflow: bool
+
+
+@dataclass
 class LinePlacement:
     text: str
     paragraph_index: int | None
@@ -45,11 +51,16 @@ def wrap_text(
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     max_width: int,
     tab_width: int = 4,
-) -> list[WrappedParagraph]:
-    """Wrap each paragraph to fit within the given width."""
+) -> WrapResult:
+    """Wrap each paragraph to fit within the given width.
+
+    Returns:
+        WrapResult containing wrapped paragraphs and overflow flag
+    """
 
     paragraphs = text.split("\n")
     wrapped_paragraphs: list[WrappedParagraph] = []
+    has_overflow = False
 
     for paragraph in paragraphs:
         stripped_paragraph = paragraph.strip()
@@ -97,6 +108,8 @@ def wrap_text(
                 )
                 bbox = draw.textbbox((0, 0), test_line, font=font)
                 if bbox[2] - bbox[0] > max_width:
+                    # Word is too long to fit on a line - mark as overflow
+                    has_overflow = True
                     paragraph_lines.append(
                         (leading_whitespace if is_first_line else "") + word
                     )
@@ -114,7 +127,7 @@ def wrap_text(
             )
         )
 
-    return wrapped_paragraphs
+    return WrapResult(paragraphs=wrapped_paragraphs, has_overflow=has_overflow)
 
 
 def arrange_lines_in_columns(
@@ -230,32 +243,51 @@ def create_image_with_text(
     usable_width = max(1, int(scaled_image_size[0] * max_width_ratio))
     num_columns = max(1, num_columns)
     column_gap = max(0, column_gap)
-    total_gap = column_gap * (num_columns - 1)
-    if usable_width - total_gap <= 0:
-        num_columns = 1
-        column_gap = 0
-        total_gap = 0
 
-    max_available_width = max(1, usable_width - total_gap)
-    if max_available_width < num_columns:
-        num_columns = 1
-        column_gap = 0
-        total_gap = 0
-        max_available_width = max(1, usable_width)
-    if column_width is not None:
-        requested_width = max(1, column_width)
-        resolved_column_width = min(requested_width, max_available_width)
-        if resolved_column_width * num_columns > max_available_width:
+    # Retry loop: reduce columns if words don't fit
+    wrapped_paragraphs = None
+    has_overflow = True
+    while has_overflow and num_columns >= 1:
+        total_gap = column_gap * (num_columns - 1)
+        if usable_width - total_gap <= 0:
+            num_columns = 1
+            column_gap = 0
+            total_gap = 0
+
+        max_available_width = max(1, usable_width - total_gap)
+        if max_available_width < num_columns:
+            num_columns = 1
+            column_gap = 0
+            total_gap = 0
+            max_available_width = max(1, usable_width)
+        if column_width is not None:
+            requested_width = max(1, column_width)
+            resolved_column_width = min(requested_width, max_available_width)
+            if resolved_column_width * num_columns > max_available_width:
+                resolved_column_width = max(1, max_available_width // num_columns)
+        else:
             resolved_column_width = max(1, max_available_width // num_columns)
-    else:
-        resolved_column_width = max(1, max_available_width // num_columns)
 
-    resolved_column_width = max(1, resolved_column_width)
-    column_width = resolved_column_width
+        resolved_column_width = max(1, resolved_column_width)
+        current_column_width = resolved_column_width
+
+        # Try wrapping with current column configuration
+        wrap_result = wrap_text(draw, text, font, current_column_width, tab_width)
+        wrapped_paragraphs = wrap_result.paragraphs
+        has_overflow = wrap_result.has_overflow
+
+        # If overflow detected and we can reduce columns, try again
+        if has_overflow and num_columns > 1:
+            num_columns -= 1
+        else:
+            # Either no overflow or we're at minimum columns (1)
+            break
+
+    # Final column configuration after retry loop
+    column_width = current_column_width
+    total_gap = column_gap * (num_columns - 1)
     block_width = column_width * num_columns + total_gap
     margin_x = max(0, (scaled_image_size[0] - block_width) // 2)
-
-    wrapped_paragraphs = wrap_text(draw, text, font, column_width, tab_width)
 
     line_height = (
         draw.textbbox((0, 0), "Ag", font=font)[3]
@@ -370,3 +402,106 @@ def dummy_text_with_line_breaks(num_sentences=5):
     ]
     selected_sentences = random.choices(sentences, k=num_sentences)
     return "\n".join(selected_sentences)
+
+
+def _visualise_bboxes(
+    image: Image.Image,
+    paragraph_bboxes: list[dict],
+    line_width: int = 2,
+    show_labels: bool = True,
+    max_label_chars: int = 20,
+) -> Image.Image:
+    """
+    Draw bounding boxes on an image to visualize paragraph locations.
+
+    Args:
+        image: PIL Image object to draw on
+        paragraph_bboxes: List of bbox dictionaries with format:
+            [{"paragraph_index": int, "paragraph_text": str, "column": int, "bbox": [x1, y1, x2, y2]}]
+        line_width: Width of the rectangle border in pixels
+        show_labels: Whether to show paragraph text preview labels
+        max_label_chars: Maximum number of characters to show in label preview
+
+    Returns:
+        PIL Image object with bounding boxes drawn
+    """
+    # Create a copy to avoid modifying the original
+    visualized_image = image.copy()
+    draw = ImageDraw.Draw(visualized_image)
+
+    # Define color palette for sequential cycling
+    color_palette = [
+        (255, 0, 0),  # Red
+        (0, 0, 255),  # Blue
+        (0, 255, 0),  # Green
+        (255, 255, 0),  # Yellow
+        (0, 255, 255),  # Cyan
+        (255, 0, 255),  # Magenta
+        (255, 165, 0),  # Orange
+        (128, 0, 128),  # Purple
+    ]
+
+    # Load a small font for labels
+    try:
+        label_font = ImageFont.truetype("Arial.ttf", 12)
+    except OSError:
+        label_font = ImageFont.load_default()
+
+    # Draw each bbox
+    for idx, bbox_data in enumerate(paragraph_bboxes):
+        # Get bbox coordinates
+        bbox = bbox_data.get("bbox", [0, 0, 0, 0])
+        if len(bbox) != 4:
+            continue
+
+        x1, y1, x2, y2 = bbox
+
+        # Select color from palette (cycle sequentially)
+        color = color_palette[idx % len(color_palette)]
+
+        # Draw rectangle
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=line_width)
+
+        # Draw label if enabled
+        if show_labels:
+            paragraph_text = bbox_data.get("paragraph_text", "")
+            if paragraph_text:
+                # Truncate text to max_label_chars
+                label_text = paragraph_text[:max_label_chars]
+                if len(paragraph_text) > max_label_chars:
+                    label_text += "..."
+
+                # Calculate label background size
+                label_bbox = draw.textbbox((0, 0), label_text, font=label_font)
+                label_width = label_bbox[2] - label_bbox[0]
+                label_height = label_bbox[3] - label_bbox[1]
+
+                # Position label at top-left of bbox with padding
+                label_x = x1
+                label_y = y1 - label_height - 4  # 4px padding
+
+                # If label would go above image, place it inside the bbox
+                if label_y < 0:
+                    label_y = y1 + 2
+
+                # Draw semi-transparent background for label
+                background_padding = 2
+                draw.rectangle(
+                    [
+                        label_x - background_padding,
+                        label_y - background_padding,
+                        label_x + label_width + background_padding,
+                        label_y + label_height + background_padding,
+                    ],
+                    fill=(0, 0, 0, 200),  # Black with some transparency
+                )
+
+                # Draw label text
+                draw.text(
+                    (label_x, label_y),
+                    label_text,
+                    fill=(255, 255, 255),
+                    font=label_font,
+                )
+
+    return visualized_image

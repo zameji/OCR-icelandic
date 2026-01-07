@@ -60,13 +60,8 @@ def _rotate_within_bounds(
 
     rotation_meta = {
         "pad": pad,
-        "canvas_size": (canvas_width, canvas_height),
-        "rotation_center": (canvas_width / 2, canvas_height / 2),
-        "rotated_size": (rotated.width, rotated.height),
-        "rotation_offset": (
-            rotated.width / 2 - canvas_width / 2,
-            rotated.height / 2 - canvas_height / 2,
-        ),
+        "canvas_center": (canvas_width / 2, canvas_height / 2),
+        "rotated_center": (rotated.width / 2, rotated.height / 2),
         "angle": angle,
         "crop_box": (left, top, left + crop_width, top + crop_height),
         "resize_scale": (
@@ -86,8 +81,8 @@ def _transform_paragraph_bboxes_for_rotation(
         return []
 
     pad = meta["pad"]
-    center_x, center_y = meta["rotation_center"]
-    offset_x, offset_y = meta["rotation_offset"]
+    canvas_center_x, canvas_center_y = meta["canvas_center"]
+    rotated_center_x, rotated_center_y = meta["rotated_center"]
     angle_rad = math.radians(meta["angle"])
     cos_theta = math.cos(angle_rad)
     sin_theta = math.sin(angle_rad)
@@ -98,17 +93,32 @@ def _transform_paragraph_bboxes_for_rotation(
     transformed: list[dict] = []
 
     def _map_point(x: float, y: float) -> tuple[float, float]:
+        # Step 1: Add padding (image was pasted at (pad, pad) on canvas)
         canvas_x = x + pad
         canvas_y = y + pad
-        rel_x = canvas_x - center_x
-        rel_y = canvas_y - center_y
-        rotated_x = cos_theta * rel_x - sin_theta * rel_y + center_x
-        rotated_y = sin_theta * rel_x + cos_theta * rel_y + center_y
-        rotated_x += offset_x
-        rotated_y += offset_y
+
+        # Step 2: Convert to relative coordinates from canvas center
+        rel_x = canvas_x - canvas_center_x
+        rel_y = canvas_y - canvas_center_y
+
+        # Step 3: Apply rotation matrix (negated angle to match PIL's rotation)
+        # PIL rotates counter-clockwise for positive angles, so we use -angle
+        rotated_rel_x = cos_theta * rel_x + sin_theta * rel_y
+        rotated_rel_y = -sin_theta * rel_x + cos_theta * rel_y
+
+        # Step 4: Convert back to absolute coordinates in rotated image space
+        rotated_x = rotated_rel_x + rotated_center_x
+        rotated_y = rotated_rel_y + rotated_center_y
+
+        # Step 5: Apply crop offset
         cropped_x = rotated_x - crop_left
         cropped_y = rotated_y - crop_top
-        return cropped_x * scale_x, cropped_y * scale_y
+
+        # Step 6: Apply resize scaling to final dimensions
+        final_x = cropped_x * scale_x
+        final_y = cropped_y * scale_y
+
+        return final_x, final_y
 
     for bbox in paragraph_bboxes:
         x0, y0, x1, y1 = bbox.get("bbox", [0, 0, 0, 0])

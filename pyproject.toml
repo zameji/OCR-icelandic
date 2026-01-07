@@ -34,6 +34,8 @@ default = true
 dev = [
     "ipykernel>=6.30.1",
     "pre-commit>=4.5.0",
+    "pytest>=9.0.2",
+    "syrupy>=5.0.0",
 ]
 
 train = [
