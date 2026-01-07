@@ -7,6 +7,7 @@ synthetic_output
 gold_data
 isl_synthetic_ocr_output
 fonts
+.fontcache
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -226,3 +227,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local outputs
+local_output/

@@ -6,6 +6,7 @@ Saves the new dataset to disk and optionally pushes it to the Hugging Face Hub.
 
 from collections import defaultdict
 import logging
+import os
 import random
 import sys
 from dataclasses import asdict, dataclass
@@ -13,10 +14,19 @@ from pathlib import Path
 from typing import cast
 
 from datasets import Dataset, DatasetDict, Image, load_dataset
-from fontTools.ttLib import TTFont
 import psutil
+from ocr_icelandic.fonts import (
+    get_compatible_fonts,
+    sync_google_fonts,
+)
 from ocr_icelandic.transformations import apply_random_transformation
-from ocr_icelandic.utils import create_image_with_text
+from ocr_icelandic.utils import (
+    _visualise_bboxes,
+    apply_background_image,
+    create_image_with_text,
+    discover_backgrounds,
+    discover_paper_textures,
+)
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from rich.logging import RichHandler
@@ -41,7 +51,7 @@ class DataConfig:
     data_directory: str = "parla"  # Subdirectory or config name in the dataset
     split: str = "train"  # Which split to use from the dataset
     max_length: int = 512
-    max_entries: int = 10
+    max_entries: int = 2
     show_sample: bool = False  # Whether to show a sample image after creation
     image_width: int = 512
     image_height: int = 512
@@ -54,7 +64,7 @@ class DataConfig:
     text_vertical_alignment: str = "center"  # top, middle, bottom
     text_horizontal_alignment: str = "left"  # left, center, right
     output_path: str = "isl_synthetic_ocr_output"  # Directory to save dataset
-    num_examples: int = 0  # Number of examples to generate
+    num_examples: int = 2  # Number of examples to generate
     push_to_hub: bool = False  # Whether to push dataset to Hugging Face Hub
     save_to_disk: bool = False  # Whether to save dataset to disk
     hub_repo_id: str = (
@@ -62,6 +72,21 @@ class DataConfig:
     )
     use_random_fonts: bool = True  # Whether to use random fonts
     use_random_backgrounds: bool = True  # Whether to use random background colors
+    google_fonts_directory: str = "./google_fonts"  # Directory to store Google Fonts
+    language_code: str = (
+        "is"  # ISO 639-1 language code (e.g., "is" for Icelandic, "de" for German)
+    )
+    use_font_cache: bool = True  # Whether to use SQLite caching for font compatibility
+    font_cache_dir: str = ".fontcache"  # Directory to store font compatibility cache
+    use_paper_textures: bool = True  # Whether to use paper textures from assets/papers
+    paper_textures_dir: str = (
+        "assets/papers"  # Directory containing paper texture images
+    )
+    use_background_images: bool = True  # Whether to use background images
+    backgrounds_dir: str = (
+        "assets/backgrounds"  # Directory containing background images
+    )
+    background_image_probability: float = 1  # Probability of using a background image
     max_text_length: int = 2000  # Maximum characters per text before splitting
     column_gap: int = 20  # Horizontal gap in pixels between columns
     num_columns: int | None = (
@@ -82,6 +107,9 @@ class GenerationConfig(DataConfig):
     column_range: tuple[int, int] = (1, 1)
     column_width_range: tuple[int, int] = (100, 512)
     available_fonts: list[str] | None = None
+    available_paper_textures: list[str] | None = None
+    available_no_shadow_backgrounds: list[str] | None = None
+    available_with_shadow_backgrounds: list[str] | None = None
 
 
 @dataclass
@@ -192,64 +220,6 @@ def split_long_text(text: str, max_length: int) -> list[str]:
     return chunks
 
 
-def check_font_supports_char(fontpath, unicode_char):
-    font = TTFont(fontpath)  # specify the path to the font in question
-
-    for cmap in font["cmap"].tables:
-        if cmap.isUnicode():
-            if ord(unicode_char) in cmap.cmap:
-                return True
-    return False
-
-
-def get_icelandic_compatible_fonts():
-    # load fonts from font directory
-
-    random.seed(42)  # For reproducibility
-
-    # Check common font directories based on OS
-    current_os = sys.platform
-
-    font_dirs = []
-
-    # macos
-    if current_os.startswith("darwin"):
-        font_dirs = [
-            "/System/Library/Fonts",
-            "/System/Library/Fonts/Supplemental",
-        ]
-    # linux
-    if current_os.startswith("linux"):
-        font_dirs += [
-            "/usr/share/fonts",
-            "/usr/local/share/fonts",
-        ]
-    # windows
-    if current_os.startswith("win"):
-        font_dirs += [
-            str(Path.home() / "AppData/Local/Microsoft/Windows/Fonts"),
-            str(Path.home() / "AppData/Roaming/Microsoft/Windows/Fonts"),
-            "C:/Windows/Fonts",
-        ]
-
-    logger.info(f"Searching for fonts in directories: {font_dirs}")
-
-    available_fonts: list[str] = []
-    characters_to_check = "ÁáÐðÉéÍíÓóÚúÝýÞþÆæÖö"
-    for font_dir in tqdm(font_dirs, desc="Scanning font directories"):
-        font_path = Path(font_dir)
-        if font_path.exists() and font_path.is_dir():
-            for font_file in font_path.rglob("*.[tT][tT][fF]"):
-                for char in characters_to_check:
-                    if check_font_supports_char(font_file, char):
-                        available_fonts.append(str(font_file))
-                        break  # No need to check other characters for this font
-
-    logger.info(f"Found {len(available_fonts)} Icelandic-compatible fonts.")
-
-    return available_fonts
-
-
 def _normalize_range(
     min_value: int, max_value: int, minimum: int = 1
 ) -> tuple[int, int]:
@@ -295,6 +265,11 @@ def generate_single_text(
             if cfg.use_random_backgrounds:
                 current_bg_color = get_random_background_color()
 
+            # Select random paper texture if enabled
+            paper_texture_path = None
+            if cfg.use_paper_textures and cfg.available_paper_textures:
+                paper_texture_path = random.choice(cfg.available_paper_textures)
+
             # Select random font color if enabled
             if cfg.use_random_font_colors:
                 font_color = get_random_font_color(current_bg_color)
@@ -322,14 +297,64 @@ def generate_single_text(
                 num_columns=num_columns,
                 column_gap=cfg.column_gap,
                 column_width=column_width,
+                paper_texture_path=paper_texture_path,
             )
 
+            # Decide whether to use a background image
+            use_background = False
+            background_has_shadow = True
+            background_path = None
+
+            if cfg.use_background_images and (
+                cfg.available_no_shadow_backgrounds
+                or cfg.available_with_shadow_backgrounds
+            ):
+                # Use background based on probability
+                if random.random() < cfg.background_image_probability:
+                    use_background = True
+                    logger.info("Using background image for this sample.")
+                    # Choose background type (with/without shadow)
+                    all_backgrounds = []
+                    if cfg.available_with_shadow_backgrounds:
+                        all_backgrounds.extend(
+                            [(bg, True) for bg in cfg.available_with_shadow_backgrounds]
+                        )
+                    if cfg.available_no_shadow_backgrounds:
+                        all_backgrounds.extend(
+                            [(bg, False) for bg in cfg.available_no_shadow_backgrounds]
+                        )
+
+                    if all_backgrounds:
+                        background_path, background_has_shadow = random.choice(
+                            all_backgrounds
+                        )
+
+            # Apply transformations with the appropriate pipeline
             transformed_image, transformation_meta, transformed_paragraph_bboxes = (
                 apply_random_transformation(
                     image,
                     current_bg_color,
                     paragraph_bboxes=paragraph_bboxes,
+                    use_background=use_background,
+                    background_has_shadow=background_has_shadow,
                 )
+            )
+
+            # Apply background image if selected
+            if use_background and background_path:
+                logger.info(f"Using background image: {background_path}")
+                transformed_image, bg_meta, transformed_paragraph_bboxes = (
+                    apply_background_image(
+                        transformed_image,
+                        background_path,
+                        paragraph_bboxes=transformed_paragraph_bboxes,
+                    )
+                )
+                # Add background metadata to transformations
+                transformation_meta.append({"transformation": "background", **bg_meta})
+
+            transformed_image = _visualise_bboxes(
+                transformed_image, transformed_paragraph_bboxes, show_labels=False
             )
 
             if not fitted_text:
@@ -378,9 +403,54 @@ def generate_image_dataset(texts: list[str], cfg: DataConfig) -> Dataset:
     # fix number of examples to generate if specified
     num_examples = cfg.num_examples if cfg.num_examples > 0 else len(texts)
 
+    # Check for Google Fonts API key and sync fonts if available
+    google_fonts_api_key = os.environ.get("GOOGLE_FONTS_API_KEY")
+    if google_fonts_api_key:
+        logger.info("GOOGLE_FONTS_API_KEY found, syncing Google Fonts...")
+        sync_google_fonts(google_fonts_api_key, cfg.google_fonts_directory)
+    else:
+        logger.warning(
+            "GOOGLE_FONTS_API_KEY environment variable not set. "
+            "Skipping Google Fonts sync and using only system fonts."
+        )
+
     available_fonts = None
     if cfg.use_random_fonts:
-        available_fonts = get_icelandic_compatible_fonts()
+        available_fonts = get_compatible_fonts(
+            language_code=cfg.language_code,
+            use_cache=cfg.use_font_cache,
+            cache_dir=cfg.font_cache_dir,
+            google_fonts_directory=cfg.google_fonts_directory,
+        )
+
+    available_paper_textures = None
+    if cfg.use_paper_textures:
+        available_paper_textures = discover_paper_textures(cfg.paper_textures_dir)
+        if available_paper_textures:
+            logger.info(
+                f"Found {len(available_paper_textures)} paper textures in {cfg.paper_textures_dir}"
+            )
+        else:
+            logger.warning(
+                f"No paper textures found in {cfg.paper_textures_dir}, falling back to solid colors"
+            )
+
+    available_no_shadow_backgrounds = []
+    available_with_shadow_backgrounds = []
+    if cfg.use_background_images:
+        available_no_shadow_backgrounds, available_with_shadow_backgrounds = (
+            discover_backgrounds(cfg.backgrounds_dir)
+        )
+        logger.info(
+            f"Found {len(available_no_shadow_backgrounds)} no-shadow backgrounds and {len(available_with_shadow_backgrounds)} with-shadow backgrounds"
+        )
+        if (
+            not available_no_shadow_backgrounds
+            and not available_with_shadow_backgrounds
+        ):
+            logger.warning(
+                f"No backgrounds found in {cfg.backgrounds_dir}, will not use background images"
+            )
 
     column_range = _normalize_range(cfg.min_num_columns, cfg.max_num_columns, minimum=1)
     column_width_range = _normalize_range(
@@ -390,6 +460,9 @@ def generate_image_dataset(texts: list[str], cfg: DataConfig) -> Dataset:
     generation_cfg = GenerationConfig(
         **asdict(cfg),
         available_fonts=available_fonts,
+        available_paper_textures=available_paper_textures,
+        available_no_shadow_backgrounds=available_no_shadow_backgrounds,
+        available_with_shadow_backgrounds=available_with_shadow_backgrounds,
         column_range=column_range,
         column_width_range=column_width_range,
     )

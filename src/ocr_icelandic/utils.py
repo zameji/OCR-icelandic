@@ -1,5 +1,6 @@
 import random
 from dataclasses import dataclass
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -23,11 +24,266 @@ def load_font(
         return ImageFont.load_default()
 
 
+def discover_paper_textures(papers_dir: str = "assets/papers") -> list[str]:
+    """
+    Discover paper texture files in the specified directory.
+
+    Args:
+        papers_dir: Path to directory containing paper texture images
+
+    Returns:
+        List of absolute paths to paper texture files
+    """
+    paper_paths = []
+    papers_path = Path(papers_dir)
+
+    if not papers_path.exists():
+        return paper_paths
+
+    # Look for common image formats
+    for ext in ["*.png", "*.jpg", "*.jpeg", "*.bmp"]:
+        paper_paths.extend(str(p) for p in papers_path.glob(ext))
+
+    return sorted(paper_paths)
+
+
+def apply_paper_texture(
+    image: Image.Image,
+    texture_path: str,
+    blend_alpha: float = 0.85,
+) -> Image.Image:
+    """
+    Apply a paper texture to an image background.
+
+    This function extracts the texture pattern from the source image and applies it
+    to the target background color, similar to GIMP's "Color to Alpha" approach.
+    It preserves the texture's shadows, highlights, and surface details while
+    replacing the base color.
+
+    Args:
+        image: Base image to apply texture to (with desired background color)
+        texture_path: Path to paper texture image
+        blend_alpha: Alpha value for texture intensity (0.0-1.0, higher = more visible texture)
+
+    Returns:
+        Image with paper texture applied
+    """
+    try:
+        # Load the texture in RGB mode to preserve all detail
+        texture = Image.open(texture_path).convert("RGB")
+
+        # Resize or tile texture to match image size
+        img_width, img_height = image.size
+        tex_width, tex_height = texture.size
+
+        # If texture is smaller, tile it
+        if tex_width < img_width or tex_height < img_height:
+            # Calculate how many tiles we need
+            tiles_x = (img_width // tex_width) + 2
+            tiles_y = (img_height // tex_height) + 2
+
+            # Create tiled texture
+            tiled = Image.new("RGB", (tex_width * tiles_x, tex_height * tiles_y))
+            for i in range(tiles_x):
+                for j in range(tiles_y):
+                    tiled.paste(texture, (i * tex_width, j * tex_height))
+
+            texture = tiled
+
+        # Crop to exact size with random offset for variety
+        max_offset_x = max(0, texture.width - img_width)
+        max_offset_y = max(0, texture.height - img_height)
+        offset_x = random.randint(0, max_offset_x) if max_offset_x > 0 else 0
+        offset_y = random.randint(0, max_offset_y) if max_offset_y > 0 else 0
+
+        texture = texture.crop(
+            (offset_x, offset_y, offset_x + img_width, offset_y + img_height)
+        )
+
+        # Convert to numpy arrays for processing
+        import numpy as np
+
+        texture_array = np.array(texture, dtype=np.float32)
+        img_array = np.array(image, dtype=np.float32)
+
+        # Calculate the average color of the texture (its "base" color)
+        texture_mean = np.mean(texture_array, axis=(0, 1), keepdims=True)
+
+        # Extract luminance of the texture
+        # Using standard luminance weights for RGB
+        texture_luminance = (
+            0.299 * texture_array[:, :, 0]
+            + 0.587 * texture_array[:, :, 1]
+            + 0.114 * texture_array[:, :, 2]
+        )
+        mean_luminance = np.mean(texture_luminance)
+
+        # Calculate luminance variation factor for each pixel
+        # This represents how much darker/lighter each pixel is compared to average
+        luminance_factor = texture_luminance / (
+            mean_luminance + 1e-6
+        )  # Avoid division by zero
+
+        # Apply the luminance variation to the target background color
+        # This preserves shadows and highlights from the texture
+        for channel in range(3):
+            img_array[:, :, channel] = img_array[:, :, channel] * luminance_factor
+
+        # Mix the result with the original image based on blend_alpha
+        # This allows control over texture intensity
+        final_array = img_array * blend_alpha + np.array(image, dtype=np.float32) * (
+            1 - blend_alpha
+        )
+
+        # Clip values to valid range
+        final_array = np.clip(final_array, 0, 255).astype(np.uint8)
+
+        # Convert back to PIL Image
+        result = Image.fromarray(final_array, mode="RGB")
+
+        return result
+
+    except Exception as e:
+        # If texture loading fails, return original image
+        print(f"Warning: Failed to apply paper texture from {texture_path}: {e}")
+        return image
+
+
+def discover_backgrounds(
+    backgrounds_dir: str = "assets/backgrounds",
+) -> tuple[list[str], list[str]]:
+    """
+    Discover background images separated by shadow type.
+
+    Args:
+        backgrounds_dir: Path to directory containing background images
+
+    Returns:
+        Tuple of (no_shadow_backgrounds, with_shadow_backgrounds)
+    """
+    no_shadow_paths = []
+    with_shadow_paths = []
+
+    backgrounds_path = Path(backgrounds_dir)
+    if not backgrounds_path.exists():
+        return no_shadow_paths, with_shadow_paths
+
+    # Discover no_shadow backgrounds
+    no_shadow_dir = backgrounds_path / "no_shadow"
+    if no_shadow_dir.exists():
+        for ext in ["*.png", "*.jpg", "*.jpeg", "*.bmp"]:
+            no_shadow_paths.extend(str(p) for p in no_shadow_dir.rglob(ext))
+
+    # Discover with_shadow backgrounds
+    with_shadow_dir = backgrounds_path / "with_shadow"
+    if with_shadow_dir.exists():
+        for ext in ["*.png", "*.jpg", "*.jpeg", "*.bmp"]:
+            with_shadow_paths.extend(str(p) for p in with_shadow_dir.rglob(ext))
+
+    return sorted(no_shadow_paths), sorted(with_shadow_paths)
+
+
+def apply_background_image(
+    foreground: Image.Image,
+    background_path: str,
+    paragraph_bboxes: list[dict] | None = None,
+    position: tuple[int, int] | None = None,
+) -> tuple[Image.Image, dict, list[dict]]:
+    """
+    Composite a foreground image (paper with text) onto a background image.
+
+    Args:
+        foreground: The paper image with text
+        background_path: Path to background image
+        paragraph_bboxes: Optional bounding boxes to transform
+        position: Optional (x, y) position to place the foreground. If None, centers it.
+
+    Returns:
+        Tuple of (composited image, metadata dict, transformed bboxes)
+    """
+    from ocr_icelandic.transformations.shared import _copy_paragraph_bboxes
+
+    paragraph_bboxes_copy = _copy_paragraph_bboxes(paragraph_bboxes)
+
+    try:
+        # Load the background
+        background = Image.open(background_path).convert("RGBA")
+        bg_width, bg_height = background.size
+        fg_width, fg_height = foreground.size
+
+        # Convert foreground to RGBA if needed
+        if foreground.mode != "RGBA":
+            foreground = foreground.convert("RGBA")
+
+        # Scale background if it's smaller than foreground
+        if bg_width < fg_width or bg_height < fg_height:
+            scale_factor = max(fg_width / bg_width, fg_height / bg_height) * 1.2
+            new_bg_width = int(bg_width * scale_factor)
+            new_bg_height = int(bg_height * scale_factor)
+            background = background.resize(
+                (new_bg_width, new_bg_height), Image.Resampling.BICUBIC
+            )
+            bg_width, bg_height = background.size
+
+        # Determine position (center by default, or use provided position)
+        if position is None:
+            # Center the paper on the background
+            x = (bg_width - fg_width) // 2
+            y = (bg_height - fg_height) // 2
+            position = (x, y)
+
+        # Create composite
+        composite = background.copy()
+        composite.paste(foreground, position, foreground)
+
+        # Convert back to RGB
+        composite = composite.convert("RGB")
+
+        # Crop back to original foreground size, centered on the pasted paper
+        paste_x, paste_y = position
+        crop_x = paste_x
+        crop_y = paste_y
+
+        # Ensure crop stays within composite bounds
+        crop_x = max(0, min(crop_x, composite.width - fg_width))
+        crop_y = max(0, min(crop_y, composite.height - fg_height))
+
+        composite = composite.crop(
+            (crop_x, crop_y, crop_x + fg_width, crop_y + fg_height)
+        )
+
+        # Bounding boxes don't need adjustment since we cropped exactly where the paper was
+        # The paper is in the same relative position in the final image as it was in the original
+
+        metadata = {
+            "background_path": background_path,
+            "position": position,
+            "background_size": (bg_width, bg_height),
+            "crop_offset": (crop_x, crop_y),
+        }
+
+        return composite, metadata, paragraph_bboxes_copy
+
+    except Exception as e:
+        print(f"Warning: Failed to apply background from {background_path}: {e}")
+        # Return original foreground if background application fails
+        rgb_foreground = (
+            foreground.convert("RGB") if foreground.mode != "RGB" else foreground
+        )
+        return rgb_foreground, {}, paragraph_bboxes_copy
+
+
 @dataclass
 class WrappedParagraph:
     lines: list[str]
     text: str
     has_text: bool
+
+
+@dataclass
+class WrapResult:
+    paragraphs: list[WrappedParagraph]
+    has_overflow: bool
 
 
 @dataclass
@@ -45,11 +301,16 @@ def wrap_text(
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     max_width: int,
     tab_width: int = 4,
-) -> list[WrappedParagraph]:
-    """Wrap each paragraph to fit within the given width."""
+) -> WrapResult:
+    """Wrap each paragraph to fit within the given width.
+
+    Returns:
+        WrapResult containing wrapped paragraphs and overflow flag
+    """
 
     paragraphs = text.split("\n")
     wrapped_paragraphs: list[WrappedParagraph] = []
+    has_overflow = False
 
     for paragraph in paragraphs:
         stripped_paragraph = paragraph.strip()
@@ -97,6 +358,8 @@ def wrap_text(
                 )
                 bbox = draw.textbbox((0, 0), test_line, font=font)
                 if bbox[2] - bbox[0] > max_width:
+                    # Word is too long to fit on a line - mark as overflow
+                    has_overflow = True
                     paragraph_lines.append(
                         (leading_whitespace if is_first_line else "") + word
                     )
@@ -114,7 +377,7 @@ def wrap_text(
             )
         )
 
-    return wrapped_paragraphs
+    return WrapResult(paragraphs=wrapped_paragraphs, has_overflow=has_overflow)
 
 
 def arrange_lines_in_columns(
@@ -181,6 +444,7 @@ def create_image_with_text(
     num_columns: int = 1,
     column_gap: int = 20,
     column_width: int | None = None,
+    paper_texture_path: str | None = None,
 ) -> tuple[Image.Image, str, list[dict]]:
     """
     Create an image with text for OCR training and return paragraph bounding boxes.
@@ -200,6 +464,7 @@ def create_image_with_text(
         num_columns: Number of columns to use when laying out text
         column_gap: Gap in pixels between columns
         column_width: Fixed pixel width for each column (None to auto-size)
+        paper_texture_path: Optional path to paper texture image to use as background
 
     Returns:
         tuple: (PIL Image object, string of text that actually fits in the image, paragraph bounding boxes)
@@ -215,47 +480,72 @@ def create_image_with_text(
     image.info["dpi"] = (dpi, dpi)
     draw = ImageDraw.Draw(image)
 
-    # add gaussian noice to the background to make it more realistic and less uniform
-    noise = Image.effect_noise(scaled_image_size, 10)
-    image = Image.blend(image, noise.convert("RGB"), 0.1)
-    draw = ImageDraw.Draw(image)
+    # Apply paper texture if provided
+    if paper_texture_path is not None:
+        # Apply texture preserving background color but adding paper surface details
+        image = apply_paper_texture(image, paper_texture_path, blend_alpha=0.9)
+        draw = ImageDraw.Draw(image)
+    else:
+        # add gaussian noice to the background to make it more realistic and less uniform
+        noise = Image.effect_noise(scaled_image_size, 10)
+        image = Image.blend(image, noise.convert("RGB"), 0.1)
+        draw = ImageDraw.Draw(image)
 
-    # add "dirt" texture to the background
-    dirt_texture = Image.effect_noise(scaled_image_size, 5)
-    image = Image.blend(image, dirt_texture.convert("RGB"), 0.05)
-    draw = ImageDraw.Draw(image)
+        # add "dirt" texture to the background
+        dirt_texture = Image.effect_noise(scaled_image_size, 5)
+        image = Image.blend(image, dirt_texture.convert("RGB"), 0.05)
+        draw = ImageDraw.Draw(image)
 
     font = load_font(font_path=font_path, font_size=scaled_font_size)
 
     usable_width = max(1, int(scaled_image_size[0] * max_width_ratio))
     num_columns = max(1, num_columns)
     column_gap = max(0, column_gap)
-    total_gap = column_gap * (num_columns - 1)
-    if usable_width - total_gap <= 0:
-        num_columns = 1
-        column_gap = 0
-        total_gap = 0
 
-    max_available_width = max(1, usable_width - total_gap)
-    if max_available_width < num_columns:
-        num_columns = 1
-        column_gap = 0
-        total_gap = 0
-        max_available_width = max(1, usable_width)
-    if column_width is not None:
-        requested_width = max(1, column_width)
-        resolved_column_width = min(requested_width, max_available_width)
-        if resolved_column_width * num_columns > max_available_width:
+    # Retry loop: reduce columns if words don't fit
+    wrapped_paragraphs = None
+    has_overflow = True
+    while has_overflow and num_columns >= 1:
+        total_gap = column_gap * (num_columns - 1)
+        if usable_width - total_gap <= 0:
+            num_columns = 1
+            column_gap = 0
+            total_gap = 0
+
+        max_available_width = max(1, usable_width - total_gap)
+        if max_available_width < num_columns:
+            num_columns = 1
+            column_gap = 0
+            total_gap = 0
+            max_available_width = max(1, usable_width)
+        if column_width is not None:
+            requested_width = max(1, column_width)
+            resolved_column_width = min(requested_width, max_available_width)
+            if resolved_column_width * num_columns > max_available_width:
+                resolved_column_width = max(1, max_available_width // num_columns)
+        else:
             resolved_column_width = max(1, max_available_width // num_columns)
-    else:
-        resolved_column_width = max(1, max_available_width // num_columns)
 
-    resolved_column_width = max(1, resolved_column_width)
-    column_width = resolved_column_width
+        resolved_column_width = max(1, resolved_column_width)
+        current_column_width = resolved_column_width
+
+        # Try wrapping with current column configuration
+        wrap_result = wrap_text(draw, text, font, current_column_width, tab_width)
+        wrapped_paragraphs = wrap_result.paragraphs
+        has_overflow = wrap_result.has_overflow
+
+        # If overflow detected and we can reduce columns, try again
+        if has_overflow and num_columns > 1:
+            num_columns -= 1
+        else:
+            # Either no overflow or we're at minimum columns (1)
+            break
+
+    # Final column configuration after retry loop
+    column_width = current_column_width
+    total_gap = column_gap * (num_columns - 1)
     block_width = column_width * num_columns + total_gap
     margin_x = max(0, (scaled_image_size[0] - block_width) // 2)
-
-    wrapped_paragraphs = wrap_text(draw, text, font, column_width, tab_width)
 
     line_height = (
         draw.textbbox((0, 0), "Ag", font=font)[3]
@@ -370,3 +660,106 @@ def dummy_text_with_line_breaks(num_sentences=5):
     ]
     selected_sentences = random.choices(sentences, k=num_sentences)
     return "\n".join(selected_sentences)
+
+
+def _visualise_bboxes(
+    image: Image.Image,
+    paragraph_bboxes: list[dict],
+    line_width: int = 2,
+    show_labels: bool = True,
+    max_label_chars: int = 20,
+) -> Image.Image:
+    """
+    Draw bounding boxes on an image to visualize paragraph locations.
+
+    Args:
+        image: PIL Image object to draw on
+        paragraph_bboxes: List of bbox dictionaries with format:
+            [{"paragraph_index": int, "paragraph_text": str, "column": int, "bbox": [x1, y1, x2, y2]}]
+        line_width: Width of the rectangle border in pixels
+        show_labels: Whether to show paragraph text preview labels
+        max_label_chars: Maximum number of characters to show in label preview
+
+    Returns:
+        PIL Image object with bounding boxes drawn
+    """
+    # Create a copy to avoid modifying the original
+    visualized_image = image.copy()
+    draw = ImageDraw.Draw(visualized_image)
+
+    # Define color palette for sequential cycling
+    color_palette = [
+        (255, 0, 0),  # Red
+        (0, 0, 255),  # Blue
+        (0, 255, 0),  # Green
+        (255, 255, 0),  # Yellow
+        (0, 255, 255),  # Cyan
+        (255, 0, 255),  # Magenta
+        (255, 165, 0),  # Orange
+        (128, 0, 128),  # Purple
+    ]
+
+    # Load a small font for labels
+    try:
+        label_font = ImageFont.truetype("Arial.ttf", 12)
+    except OSError:
+        label_font = ImageFont.load_default()
+
+    # Draw each bbox
+    for idx, bbox_data in enumerate(paragraph_bboxes):
+        # Get bbox coordinates
+        bbox = bbox_data.get("bbox", [0, 0, 0, 0])
+        if len(bbox) != 4:
+            continue
+
+        x1, y1, x2, y2 = bbox
+
+        # Select color from palette (cycle sequentially)
+        color = color_palette[idx % len(color_palette)]
+
+        # Draw rectangle
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=line_width)
+
+        # Draw label if enabled
+        if show_labels:
+            paragraph_text = bbox_data.get("paragraph_text", "")
+            if paragraph_text:
+                # Truncate text to max_label_chars
+                label_text = paragraph_text[:max_label_chars]
+                if len(paragraph_text) > max_label_chars:
+                    label_text += "..."
+
+                # Calculate label background size
+                label_bbox = draw.textbbox((0, 0), label_text, font=label_font)
+                label_width = label_bbox[2] - label_bbox[0]
+                label_height = label_bbox[3] - label_bbox[1]
+
+                # Position label at top-left of bbox with padding
+                label_x = x1
+                label_y = y1 - label_height - 4  # 4px padding
+
+                # If label would go above image, place it inside the bbox
+                if label_y < 0:
+                    label_y = y1 + 2
+
+                # Draw semi-transparent background for label
+                background_padding = 2
+                draw.rectangle(
+                    [
+                        label_x - background_padding,
+                        label_y - background_padding,
+                        label_x + label_width + background_padding,
+                        label_y + label_height + background_padding,
+                    ],
+                    fill=(0, 0, 0, 200),  # Black with some transparency
+                )
+
+                # Draw label text
+                draw.text(
+                    (label_x, label_y),
+                    label_text,
+                    fill=(255, 255, 255),
+                    font=label_font,
+                )
+
+    return visualized_image

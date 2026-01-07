@@ -265,9 +265,64 @@ If you use this project in your research, please cite:
 
 [Apache 2.0](./LICENSE)
 
+## Testing
+
+The project includes a comprehensive test suite to ensure transformation quality and catch regressions.
+
+### Running Tests
+
+Install test dependencies:
+```bash
+uv sync --group dev
+# or
+pip install -e ".[dev]"
+```
+
+Run all tests:
+```bash
+pytest tests/ -v
+```
+
+### Snapshot Tests for Transformations
+
+The project uses **snapshot testing** to prevent regressions in image transformations (rotate, skew, perspective). Snapshot tests compare transformation outputs against known-good reference snapshots.
+
+**Run snapshot tests:**
+```bash
+pytest tests/test_transformation_snapshots.py -v
+```
+
+**Generate initial snapshots** (first time only):
+```bash
+pytest tests/test_transformation_snapshots.py --snapshot-update
+```
+
+**Update snapshots after intentional changes:**
+```bash
+pytest tests/test_transformation_snapshots.py --snapshot-update
+```
+
+When snapshot tests fail, it indicates that transformation outputs have changed. Review the differences carefully:
+- If the change is **intentional** (you improved the algorithm): Update snapshots
+- If the change is **unintentional** (bug introduced): Fix the code
+
+For detailed documentation on snapshot testing, see [tests/README.md](tests/README.md).
+
+### Test Coverage
+
+- `test_transformations.py` - Unit tests for all transformation functions
+- `test_transformation_snapshots.py` - Snapshot tests for visual regression detection
+- `test_column_overflow.py` - Tests for text layout edge cases
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
+
+**When contributing:**
+1. Run tests: `pytest tests/ -v`
+2. Run snapshot tests: `pytest tests/test_transformation_snapshots.py -v`
+3. If you modified transformation logic, review and update snapshots if needed
+4. Ensure all tests pass before submitting PR
 
 ## Contact
 

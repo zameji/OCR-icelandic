@@ -168,14 +168,15 @@ def _apply_perspective_distortion(
 
     metadata["dst_points"] = dst_points
 
-    # Calculate perspective transform coefficients
-    coeffs = _find_perspective_coefficients(src_points, dst_points)
+    # Calculate inverse perspective transform coefficients for PIL
+    # PIL expects coefficients that map from destination to source (inverse mapping)
+    inverse_coeffs = _find_perspective_coefficients(dst_points, src_points)
 
     # Apply perspective transformation
     transformed = canvas.transform(
         canvas.size,
         Image.Transform.PERSPECTIVE,
-        coeffs,
+        inverse_coeffs,
         resample=Image.Resampling.BICUBIC,
         fillcolor=bg_rgba,
     )
@@ -207,7 +208,7 @@ def _apply_perspective_distortion(
     # Resize back to original size
     final = cropped.resize((width, height), Image.Resampling.BICUBIC)
 
-    metadata["coeffs"] = coeffs
+    metadata["inverse_coeffs"] = inverse_coeffs
     metadata["target_size"] = (width, height)
 
     return final, metadata
@@ -342,18 +343,14 @@ def _transform_paragraph_bboxes_for_perspective(
 ) -> list[dict]:
     """
     Transform paragraph bounding boxes through perspective transformation.
-    This is an approximation since the exact inverse transform is complex.
     """
     if not paragraph_bboxes:
         return []
 
-    # For perspective transforms, the bounding boxes will be approximate
-    # since we're doing multiple transformations (pad, perspective, crop, resize)
-    # We'll use a simplified approach that scales the boxes appropriately
-
     pad = meta["pad"]
-    canvas_width, canvas_height = meta["canvas_size"]
-    crop_box = meta.get("crop_box", (0, 0, canvas_width, canvas_height))
+    src_points = meta["src_points"]
+    dst_points = meta["dst_points"]
+    crop_box = meta.get("crop_box", (0, 0, 0, 0))
     crop_left, crop_top, crop_right, crop_bottom = crop_box
     crop_width = crop_right - crop_left
     crop_height = crop_bottom - crop_top
@@ -362,36 +359,66 @@ def _transform_paragraph_bboxes_for_perspective(
     scale_x = target_width / crop_width if crop_width > 0 else 1.0
     scale_y = target_height / crop_height if crop_height > 0 else 1.0
 
+    # Get forward transformation coefficients (from source to destination)
+    # PIL uses inverse coefficients, so we need to compute the forward transform
+    forward_coeffs = _find_perspective_coefficients(src_points, dst_points)
+
+    def _map_point(x: float, y: float) -> tuple[float, float]:
+        """Transform a point through the full pipeline."""
+        # Step 1: Add padding to get canvas coordinates
+        canvas_x = x + pad
+        canvas_y = y + pad
+
+        # Step 2: Apply forward perspective transformation
+        # The forward transform maps source to destination
+        w = forward_coeffs[6] * canvas_x + forward_coeffs[7] * canvas_y + 1.0
+        if abs(w) < 1e-10:  # Avoid division by zero
+            w = 1e-10
+        transformed_x = (
+            forward_coeffs[0] * canvas_x
+            + forward_coeffs[1] * canvas_y
+            + forward_coeffs[2]
+        ) / w
+        transformed_y = (
+            forward_coeffs[3] * canvas_x
+            + forward_coeffs[4] * canvas_y
+            + forward_coeffs[5]
+        ) / w
+
+        # Step 3: Subtract crop offset
+        cropped_x = transformed_x - crop_left
+        cropped_y = transformed_y - crop_top
+
+        # Step 4: Apply resize scale
+        final_x = cropped_x * scale_x
+        final_y = cropped_y * scale_y
+
+        return final_x, final_y
+
     transformed: list[dict] = []
 
     for bbox in paragraph_bboxes:
         x0, y0, x1, y1 = bbox.get("bbox", [0, 0, 0, 0])
 
-        # Translate to canvas coordinates
-        canvas_x0 = x0 + pad
-        canvas_y0 = y0 + pad
-        canvas_x1 = x1 + pad
-        canvas_y1 = y1 + pad
+        # Transform all 4 corners of the bounding box
+        points = [
+            _map_point(x0, y0),  # top-left
+            _map_point(x1, y0),  # top-right
+            _map_point(x1, y1),  # bottom-right
+            _map_point(x0, y1),  # bottom-left
+        ]
 
-        # After perspective transform, estimate the box position
-        # (This is simplified - exact transformation would require applying the inverse)
-        # For now, we just adjust for the crop and resize
-        cropped_x0 = canvas_x0 - crop_left
-        cropped_y0 = canvas_y0 - crop_top
-        cropped_x1 = canvas_x1 - crop_left
-        cropped_y1 = canvas_y1 - crop_top
-
-        # Scale to final size
-        final_x0 = cropped_x0 * scale_x
-        final_y0 = cropped_y0 * scale_y
-        final_x1 = cropped_x1 * scale_x
-        final_y1 = cropped_y1 * scale_y
+        # Calculate new axis-aligned bounding box from transformed corners
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
 
         # Clamp to image bounds
-        clamped_x0 = _clamp_value(final_x0, 0.0, float(target_width))
-        clamped_y0 = _clamp_value(final_y0, 0.0, float(target_height))
-        clamped_x1 = _clamp_value(final_x1, 0.0, float(target_width))
-        clamped_y1 = _clamp_value(final_y1, 0.0, float(target_height))
+        clamped_x0 = _clamp_value(min_x, 0.0, float(target_width))
+        clamped_y0 = _clamp_value(min_y, 0.0, float(target_height))
+        clamped_x1 = _clamp_value(max_x, 0.0, float(target_width))
+        clamped_y1 = _clamp_value(max_y, 0.0, float(target_height))
 
         if clamped_x1 < clamped_x0:
             clamped_x1 = clamped_x0

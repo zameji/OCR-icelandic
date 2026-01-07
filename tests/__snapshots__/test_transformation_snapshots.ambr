@@ -1,0 +1,498 @@
+# serializer version: 1
+# name: TestEdgeCaseSnapshots.test_rotate_near_zero
+  list([
+    dict({
+      'bbox': list([
+        26,
+        215,
+        268,
+        225,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        26,
+        251,
+        472,
+        261,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        26,
+        287,
+        479,
+        297,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestEdgeCaseSnapshots.test_skew_near_zero
+  list([
+    dict({
+      'bbox': list([
+        28,
+        215,
+        268,
+        225,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        28,
+        251,
+        470,
+        260,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        28,
+        286,
+        476,
+        296,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestEdgeCaseSnapshots.test_small_image_rotate
+  list([
+    dict({
+      'bbox': list([
+        10,
+        10,
+        90,
+        90,
+      ]),
+    }),
+  ])
+# ---
+# name: TestPerspectiveSnapshots.test_perspective_book_curve
+  list([
+    dict({
+      'bbox': list([
+        39,
+        218,
+        268,
+        227,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        39,
+        252,
+        461,
+        261,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        39,
+        286,
+        467,
+        295,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestPerspectiveSnapshots.test_perspective_camera_angle_left
+  list([
+    dict({
+      'bbox': list([
+        49,
+        230,
+        267,
+        240,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        50,
+        265,
+        450,
+        274,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        52,
+        299,
+        455,
+        308,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestPerspectiveSnapshots.test_perspective_camera_angle_top
+  list([
+    dict({
+      'bbox': list([
+        63,
+        194,
+        267,
+        203,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        60,
+        227,
+        441,
+        237,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        58,
+        261,
+        449,
+        271,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestPerspectiveSnapshots.test_perspective_combined
+  list([
+    dict({
+      'bbox': list([
+        44,
+        212,
+        268,
+        222,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        44,
+        246,
+        456,
+        256,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        43,
+        280,
+        463,
+        290,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestPerspectiveSnapshots.test_perspective_multicolumn
+  list([
+    dict({
+      'bbox': list([
+        43,
+        14,
+        285,
+        46,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'Column layouts are common in documents like newspapers and academic papers. Each column should be handled properly.',
+    }),
+    dict({
+      'bbox': list([
+        43,
+        70,
+        284,
+        91,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'The transformation must preserve the relative positions of text across all columns.',
+    }),
+  ])
+# ---
+# name: TestRotateSnapshots.test_rotate_multicolumn
+  list([
+    dict({
+      'bbox': list([
+        43,
+        21,
+        274,
+        68,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'Column layouts are common in documents like newspapers and academic papers. Each column should be handled properly.',
+    }),
+    dict({
+      'bbox': list([
+        47,
+        75,
+        276,
+        111,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'The transformation must preserve the relative positions of text across all columns.',
+    }),
+  ])
+# ---
+# name: TestRotateSnapshots.test_rotate_small_angle_negative
+  list([
+    dict({
+      'bbox': list([
+        38,
+        206,
+        269,
+        227,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        36,
+        240,
+        462,
+        271,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        35,
+        275,
+        467,
+        306,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestRotateSnapshots.test_rotate_small_angle_positive
+  list([
+    dict({
+      'bbox': list([
+        37,
+        217,
+        266,
+        240,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        39,
+        239,
+        460,
+        274,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        41,
+        272,
+        469,
+        308,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestSkewSnapshots.test_skew_multicolumn
+  list([
+    dict({
+      'bbox': list([
+        27,
+        81,
+        259,
+        101,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'Column layouts are common in documents like newspapers and academic papers. Each column should be handled properly.',
+    }),
+    dict({
+      'bbox': list([
+        36,
+        117,
+        266,
+        130,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'The transformation must preserve the relative positions of text across all columns.',
+    }),
+  ])
+# ---
+# name: TestSkewSnapshots.test_skew_negative_dx
+  list([
+    dict({
+      'bbox': list([
+        46,
+        219,
+        264,
+        228,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        50,
+        251,
+        450,
+        260,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        54,
+        283,
+        460,
+        292,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestSkewSnapshots.test_skew_positive_dx
+  list([
+    dict({
+      'bbox': list([
+        59,
+        220,
+        271,
+        229,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        55,
+        252,
+        444,
+        260,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        50,
+        283,
+        446,
+        292,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---
+# name: TestSkewSnapshots.test_skew_small_dx
+  list([
+    dict({
+      'bbox': list([
+        38,
+        216,
+        269,
+        226,
+      ]),
+      'column': 0,
+      'paragraph_index': 0,
+      'paragraph_text': 'This is a sample document with multiple paragraphs.',
+    }),
+    dict({
+      'bbox': list([
+        36,
+        251,
+        462,
+        260,
+      ]),
+      'column': 0,
+      'paragraph_index': 2,
+      'paragraph_text': 'Each paragraph will have its own bounding box that needs to be tracked through transformations.',
+    }),
+    dict({
+      'bbox': list([
+        34,
+        285,
+        467,
+        295,
+      ]),
+      'column': 0,
+      'paragraph_index': 4,
+      'paragraph_text': 'This ensures that the OCR model can learn proper text localization even after geometric distortions.',
+    }),
+  ])
+# ---

@@ -366,49 +366,145 @@ def shadow_overlay(
     )
 
 
-CONTENT_TRANSFORMATIONS = [
-    blur,
-    ink_splashes,
-    dusty_paper,
-    reverse_bleed_through,
-    textured_stains,
-]
-PERSPECTIVE_TRANSFORMATIONS = [
-    rotate,
-    skew,
-    perspective,
-    tight_crop,
-]
-POSTPROCESSING_TRANSFORMATIONS = [
-    light_reflection,
-    shadow_overlay,
-]
+# Transformation categories with their functions and default probabilities
+TRANSFORMATION_CONFIG = {
+    "content": {
+        "blur": {"function": blur, "probability": 0.3},
+        "ink_splashes": {"function": ink_splashes, "probability": 0.2},
+        "dusty_paper": {"function": dusty_paper, "probability": 0.3},
+        "reverse_bleed_through": {
+            "function": reverse_bleed_through,
+            "probability": 0.2,
+        },
+        "textured_stains": {"function": textured_stains, "probability": 0.2},
+    },
+    "perspective": {
+        "rotate": {"function": rotate, "probability": 0.6},
+        "skew": {"function": skew, "probability": 0.4},
+        "perspective": {"function": perspective, "probability": 0.3},
+        "tight_crop": {"function": tight_crop, "probability": 0.5},
+    },
+    "postprocessing": {
+        "light_reflection": {"function": light_reflection, "probability": 0.3},
+        "shadow_overlay": {"function": shadow_overlay, "probability": 0.4},
+    },
+}
 
 
-def _get_random_subset(transformations: list) -> list:
-    k = random.randint(0, len(transformations))
-    return random.sample(transformations, k)
+def _select_transformations_by_probability(
+    category_config: dict,
+    probability_overrides: dict | None = None,
+) -> list:
+    """
+    Select transformations based on individual probabilities.
+
+    Args:
+        category_config: Dictionary of transformation configs with probabilities
+        probability_overrides: Optional dict to override default probabilities
+
+    Returns:
+        List of selected transformation functions
+    """
+    selected = []
+    for name, config in category_config.items():
+        # Get probability (use override if provided)
+        prob = (
+            probability_overrides.get(name, config["probability"])
+            if probability_overrides
+            else config["probability"]
+        )
+
+        # Select based on probability
+        if random.random() < prob:
+            selected.append(config["function"])
+
+    return selected
 
 
 def apply_random_transformation(
     image: Image.Image,
     bg_color: str | tuple[int, int, int],
     paragraph_bboxes: list[dict] | None = None,
+    use_background: bool = False,
+    background_has_shadow: bool = False,
+    probability_overrides: dict | None = None,
 ) -> tuple[Image.Image, list[dict], list[dict]]:
-    paragraph_bboxes_copy = _copy_paragraph_bboxes(paragraph_bboxes)
+    """
+    Apply random transformations to an image.
 
-    # Convert to RGBA at the start of the pipeline
+    Args:
+        image: Input image
+        bg_color: Background color
+        paragraph_bboxes: Optional bounding boxes to transform
+        use_background: Whether a background image will be used
+        background_has_shadow: If True, background receives shadows (close background);
+                               if False, background doesn't receive shadows (distant background)
+        probability_overrides: Optional dict to override transformation probabilities
+                              e.g., {"blur": 0.5, "rotate": 0.8}
+
+    Returns:
+        Tuple of (transformed image, transformation metadata, transformed bboxes)
+    """
     if image.mode != "RGBA":
         image = image.convert("RGBA")
 
-    # Apply content and perspective transformations with RGBA
-    pre_composite_transformations = [
-        *_get_random_subset(CONTENT_TRANSFORMATIONS),
-        *_get_random_subset(PERSPECTIVE_TRANSFORMATIONS),
-    ]
+    paragraph_bboxes_copy = _copy_paragraph_bboxes(paragraph_bboxes)
+
+    transformations_to_apply = []
+    if use_background:
+        # Two different pipelines based on background type
+        if background_has_shadow:
+            # Close background (e.g., desk) - all transformations apply
+            transformations_to_apply.extend(
+                _select_transformations_by_probability(
+                    TRANSFORMATION_CONFIG["content"], probability_overrides
+                )
+            )
+            transformations_to_apply.extend(
+                _select_transformations_by_probability(
+                    TRANSFORMATION_CONFIG["perspective"], probability_overrides
+                )
+            )
+            transformations_to_apply.extend(
+                _select_transformations_by_probability(
+                    TRANSFORMATION_CONFIG["postprocessing"], probability_overrides
+                )
+            )
+        else:
+            # Distant background (e.g., landscape)
+            # No shadows or light reflections on the background
+            transformations_to_apply.extend(
+                _select_transformations_by_probability(
+                    TRANSFORMATION_CONFIG["content"], probability_overrides
+                )
+            )
+            transformations_to_apply.extend(
+                _select_transformations_by_probability(
+                    TRANSFORMATION_CONFIG["perspective"], probability_overrides
+                )
+            )
+            # Skip shadow_overlay and light_reflection for distant backgrounds
+            # These effects shouldn't cast on distant backgrounds
+    else:
+        # No background - use default behavior with all transformations
+        transformations_to_apply.extend(
+            _select_transformations_by_probability(
+                TRANSFORMATION_CONFIG["content"], probability_overrides
+            )
+        )
+        transformations_to_apply.extend(
+            _select_transformations_by_probability(
+                TRANSFORMATION_CONFIG["perspective"], probability_overrides
+            )
+        )
+        transformations_to_apply.extend(
+            _select_transformations_by_probability(
+                TRANSFORMATION_CONFIG["postprocessing"], probability_overrides
+            )
+        )
 
     transformation_meta: list[dict] = []
-    for transform in pre_composite_transformations:
+    for transform in transformations_to_apply:
         image, meta, paragraph_bboxes_copy = transform(
             image, bg_color, paragraph_bboxes_copy
         )
@@ -423,14 +519,5 @@ def apply_random_transformation(
     else:
         # Fallback if transformation returned non-RGBA
         image = image.convert("RGB")
-
-    # Apply postprocessing transformations after background composite
-    postprocessing_transformations = _get_random_subset(POSTPROCESSING_TRANSFORMATIONS)
-    for transform in postprocessing_transformations:
-        image, meta, paragraph_bboxes_copy = transform(
-            image, bg_color, paragraph_bboxes_copy
-        )
-
-        transformation_meta.append(meta)
 
     return image, transformation_meta, paragraph_bboxes_copy

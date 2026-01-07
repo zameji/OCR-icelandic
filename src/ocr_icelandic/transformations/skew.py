@@ -1,4 +1,5 @@
 import random
+from typing import TypedDict
 
 from PIL import Image
 
@@ -9,25 +10,34 @@ from ocr_icelandic.transformations.shared import (
 )
 
 
+class SkewMeta(TypedDict):
+    dx: float
+    pad_x: int
+    crop_box: tuple[int, int, int, int]
+    cropped_size: tuple[int, int]
+    paste_offset: tuple[int, int]
+    canvas_max_side: int
+    target_size: tuple[int, int]
+
+
 def _skew_within_bounds(
     image: Image.Image, bg_color: str | tuple[int, int, int], dx: float
-) -> tuple[Image.Image, dict]:
+) -> tuple[Image.Image, SkewMeta]:
     width, height = image.size
 
     # Calculate the expanded width after skew
     max_shift = abs(dx * height)
-    expanded_width = width + max_shift
 
     # Create large canvas
-    pad_x = int(max_shift) + 40
-    canvas_width = width + pad_x * 2
-    # Use RGBA to preserve transparency
+    pad = int(max_shift)
+    canvas_width = width + pad * 2
     if isinstance(bg_color, tuple) and len(bg_color) == 3:
         bg_rgba = bg_color + (255,)
     else:
         bg_rgba = bg_color
+
     canvas = Image.new("RGBA", (canvas_width, height), bg_rgba)
-    canvas.paste(image, (pad_x, 0), image if image.mode == "RGBA" else None)
+    canvas.paste(image, (pad, 0), image if image.mode == "RGBA" else None)
 
     # Apply skew
     matrix = (1, dx, 0, 0, 1, 0)
@@ -39,30 +49,39 @@ def _skew_within_bounds(
         fillcolor=bg_rgba,
     )
 
-    # Find center and crop expanded area
-    center_x = skewed.width // 2
-    crop_width = int(expanded_width)
-    left = center_x - crop_width // 2
+    # Crop to remove excess area introduced by skew
 
-    cropped = skewed.crop((left, 0, left + crop_width, height))
+    if dx > 0:
+        crop_box = (0, 0, canvas_width - int(dx * height), height)
+        cropped = skewed.crop(crop_box)
+    else:
+        crop_box = (int(-dx * height), 0, canvas_width, height)
+        cropped = skewed.crop(crop_box)
 
-    resized = cropped.resize((width, height), Image.Resampling.BICUBIC)
+    # Paste centered on a rectangular canvas to scale back to original size
+    canvas_max_side = max(cropped.width, cropped.height)
+    canvas_for_resize = Image.new("RGB", (canvas_max_side, canvas_max_side), bg_color)
+    left = canvas_max_side // 2 - cropped.width // 2
+    top = canvas_max_side // 2 - cropped.height // 2
+    canvas_for_resize.paste(cropped, (left, top))
+
+    final_image = canvas_for_resize.resize((width, height), Image.Resampling.BICUBIC)
+
     skew_meta = {
         "dx": dx,
-        "pad_x": pad_x,
-        "expanded_width": expanded_width,
-        "canvas_width": canvas_width,
-        "crop_box": (left, 0, left + crop_width, height),
-        "resize_scale_x": width / crop_width if crop_width else 1.0,
-        "resize_scale_y": 1.0,
+        "pad_x": pad,
+        "crop_box": crop_box,
+        "cropped_size": (cropped.width, cropped.height),
+        "paste_offset": (left, top),
+        "canvas_max_side": canvas_max_side,
         "target_size": (width, height),
     }
 
-    return resized, skew_meta
+    return final_image, skew_meta
 
 
 def _transform_paragraph_bboxes_for_skew(
-    paragraph_bboxes: list[dict], meta: dict
+    paragraph_bboxes: list[dict], meta: SkewMeta
 ) -> list[dict]:
     if not paragraph_bboxes:
         return []
@@ -70,17 +89,36 @@ def _transform_paragraph_bboxes_for_skew(
     pad_x = meta["pad_x"]
     dx = meta["dx"]
     crop_left, crop_top, _, _ = meta["crop_box"]
-    scale_x = meta["resize_scale_x"]
-    scale_y = meta["resize_scale_y"]
+    paste_left, paste_top = meta["paste_offset"]
+    canvas_max_side = meta["canvas_max_side"]
     target_width, target_height = meta["target_size"]
 
+    # Calculate actual resize scale factors
+    resize_scale_x = target_width / canvas_max_side
+    resize_scale_y = target_height / canvas_max_side
+
     def _map_point(x: float, y: float) -> tuple[float, float]:
-        x_with_pad = x + pad_x
-        y_with_pad = y
-        skewed_x = x_with_pad - dx * y_with_pad
-        cropped_x = skewed_x - crop_left
-        cropped_y = y_with_pad - crop_top
-        return cropped_x * scale_x, cropped_y * scale_y
+        # Step 1: Add padding (image was pasted at (pad_x, 0) on canvas)
+        x_padded = x + pad_x
+        y_padded = y
+
+        # Step 2: Apply skew transformation (x_new = x_old + dx * y_old)
+        x_skewed = x_padded - dx * y_padded
+        y_skewed = y_padded
+
+        # Step 3: Apply crop offset
+        x_cropped = x_skewed - crop_left
+        y_cropped = y_skewed - crop_top
+
+        # Step 4: Add paste offset on square canvas
+        x_on_canvas = x_cropped + paste_left
+        y_on_canvas = y_cropped + paste_top
+
+        # Step 5: Apply resize to final dimensions
+        x_final = x_on_canvas * resize_scale_x
+        y_final = y_on_canvas * resize_scale_y
+
+        return x_final, y_final
 
     transformed: list[dict] = []
     for bbox in paragraph_bboxes:
